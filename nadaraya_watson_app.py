@@ -849,208 +849,245 @@ with tab_alerts:
 # TAB 5: WATCHLIST MANAGER
 # ══════════════════════════════════════════════
 with tab_watchlist:
-    st.markdown("### 📋 My Watchlists")
-    st.markdown("Apni watchlist banao, stocks add/delete karo, aur scanner mein use karo!")
 
-    # Initialize session state for watchlists
+    # ── Session State Init ───────────────────────────────────────
     if 'watchlists' not in st.session_state:
         st.session_state.watchlists = {
-            "My Nifty50 Picks": ["RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS", "ICICIBANK.NS"],
-            "Bank Stocks":      ["HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS", "KOTAKBANK.NS"],
+            "My Picks": ["RELIANCE.NS", "TCS.NS", "INFY.NS", "HDFCBANK.NS"],
+            "Bank Stocks": ["HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "AXISBANK.NS"],
         }
+    if 'active_wl' not in st.session_state:
+        st.session_state.active_wl = list(st.session_state.watchlists.keys())[0]
 
-    # ── Create New Watchlist ─────────────────────
-    st.markdown("#### ➕ Nayi Watchlist Banao")
-    col_wl1, col_wl2 = st.columns([3, 1])
-    with col_wl1:
-        new_wl_name = st.text_input("Watchlist ka naam likhein", placeholder="e.g. IT Stocks, Bank Picks, Swing Trades...")
-    with col_wl2:
-        st.write("")
-        st.write("")
-        if st.button("✅ Create", use_container_width=True):
-            if new_wl_name.strip():
-                if new_wl_name.strip() not in st.session_state.watchlists:
-                    st.session_state.watchlists[new_wl_name.strip()] = []
-                    st.success(f"✅ Watchlist '{new_wl_name}' bana di!")
+    # ── MASTER SYMBOL LIST for quick add ────────────────────────
+    ALL_SYMBOLS = {
+        "-- Select --": "",
+        "📊 Nifty 50": "^NSEI", "📊 Bank Nifty": "^NSEBANK",
+        "📊 Nifty IT": "^CNXIT", "📊 Nifty Pharma": "^CNXPHARMA",
+        "📊 Nifty Auto": "^CNXAUTO", "📊 Nifty Metal": "^CNXMETAL",
+        "📊 Sensex": "^BSESN", "📈 Nifty Futures": "NIFTY50=F",
+        "🏢 Reliance": "RELIANCE.NS", "🏢 TCS": "TCS.NS",
+        "🏢 Infosys": "INFY.NS", "🏢 HDFC Bank": "HDFCBANK.NS",
+        "🏢 ICICI Bank": "ICICIBANK.NS", "🏢 SBI": "SBIN.NS",
+        "🏢 Axis Bank": "AXISBANK.NS", "🏢 Kotak Bank": "KOTAKBANK.NS",
+        "🏢 Wipro": "WIPRO.NS", "🏢 HCL Tech": "HCLTECH.NS",
+        "🏢 L&T": "LT.NS", "🏢 Bajaj Finance": "BAJFINANCE.NS",
+        "🏢 Titan": "TITAN.NS", "🏢 Maruti": "MARUTI.NS",
+        "🏢 Asian Paints": "ASIANPAINT.NS", "🏢 Sun Pharma": "SUNPHARMA.NS",
+        "🏢 ITC": "ITC.NS", "🏢 HUL": "HINDUNILVR.NS",
+        "🏢 Tata Motors": "TATAMOTORS.NS", "🏢 Tata Steel": "TATASTEEL.NS",
+        "🏢 ONGC": "ONGC.NS", "🏢 NTPC": "NTPC.NS",
+        "🏢 Coal India": "COALINDIA.NS", "🏢 Power Grid": "POWERGRID.NS",
+        "🏢 Adani Ent.": "ADANIENT.NS", "🏢 Adani Ports": "ADANIPORTS.NS",
+        "🏢 M&M": "M&M.NS", "🏢 Hero MotoCorp": "HEROMOTOCO.NS",
+        "🏢 Zomato": "ZOMATO.NS", "🏢 Paytm": "PAYTM.NS",
+        "🏢 Nykaa": "NYKAA.NS", "🏢 IndusInd Bank": "INDUSINDBK.NS",
+        "🏢 Dr Reddy": "DRREDDY.NS", "🏢 Cipla": "CIPLA.NS",
+        "🏢 JSW Steel": "JSWSTEEL.NS", "🏢 Hindalco": "HINDALCO.NS",
+        "🏢 UltraTech": "ULTRACEMCO.NS", "🏢 Nestle": "NESTLEIND.NS",
+        "₿ Bitcoin": "BTC-USD", "₿ Ethereum": "ETH-USD",
+    }
+
+    st.markdown("### 📋 My Watchlists")
+
+    # ════════════════════════════════════════════
+    # LEFT: Watchlist names | RIGHT: Stocks
+    # ════════════════════════════════════════════
+    left_col, right_col = st.columns([1, 2])
+
+    with left_col:
+        st.markdown("#### 📂 Watchlists")
+
+        # Show all watchlists as buttons
+        for wl_name in list(st.session_state.watchlists.keys()):
+            is_active = (wl_name == st.session_state.active_wl)
+            btn_style = "background:#1f6feb; color:white;" if is_active else "background:#21262d; color:#c9d1d9;"
+            col_wlb, col_wld = st.columns([3, 1])
+            with col_wlb:
+                if st.button(
+                    f"{'▶ ' if is_active else ''}{wl_name} ({len(st.session_state.watchlists[wl_name])})",
+                    key=f"wl_btn_{wl_name}",
+                    use_container_width=True,
+                    type="primary" if is_active else "secondary"
+                ):
+                    st.session_state.active_wl = wl_name
+                    st.rerun()
+            with col_wld:
+                if st.button("🗑", key=f"del_wl_{wl_name}", help=f"Delete {wl_name}"):
+                    del st.session_state.watchlists[wl_name]
+                    remaining = list(st.session_state.watchlists.keys())
+                    st.session_state.active_wl = remaining[0] if remaining else ""
+                    st.success(f"'{wl_name}' deleted!")
+                    st.rerun()
+
+        st.divider()
+
+        # Create new watchlist
+        st.markdown("**➕ Nayi Watchlist**")
+        new_wl_name = st.text_input("Naam likhein", placeholder="e.g. Swing Trades", key="new_wl_name", label_visibility="collapsed")
+        if st.button("✅ Create Watchlist", use_container_width=True):
+            name = new_wl_name.strip()
+            if name:
+                if name not in st.session_state.watchlists:
+                    st.session_state.watchlists[name] = []
+                    st.session_state.active_wl = name
+                    st.success(f"✅ '{name}' bana di!")
                     st.rerun()
                 else:
                     st.warning("Ye naam pehle se hai!")
             else:
                 st.error("Naam likhein!")
 
-    st.divider()
+    with right_col:
+        active = st.session_state.active_wl
+        if not active or active not in st.session_state.watchlists:
+            st.info("Koi watchlist select karo ya banao.")
+        else:
+            stocks = st.session_state.watchlists[active]
+            st.markdown(f"#### 📋 {active}  `{len(stocks)} stocks`")
 
-    # ── Manage Existing Watchlists ───────────────
-    if not st.session_state.watchlists:
-        st.info("Koi watchlist nahi hai. Upar se banao!")
-    else:
-        # Select which watchlist to manage
-        selected_wl = st.selectbox(
-            "📂 Watchlist Select Karo",
-            list(st.session_state.watchlists.keys()),
-            key='manage_wl'
-        )
-
-        if selected_wl:
-            stocks = st.session_state.watchlists[selected_wl]
-
-            col_info, col_del_wl = st.columns([3, 1])
-            with col_info:
-                st.markdown(f"**{selected_wl}** — {len(stocks)} stocks")
-            with col_del_wl:
-                if st.button("🗑️ Ye Watchlist Delete Karo", key='del_wl'):
-                    del st.session_state.watchlists[selected_wl]
-                    st.success(f"'{selected_wl}' delete ho gaya!")
-                    st.rerun()
-
-            # ── Add Stock ────────────────────────
-            st.markdown("##### ➕ Stock Add Karo")
-            col_add1, col_add2, col_add3 = st.columns([2, 1, 1])
-            with col_add1:
-                new_stock_input = st.text_input(
-                    "Symbol likhein",
-                    placeholder="e.g. ZOMATO.NS, WIPRO.NS, BTC-USD",
-                    key='new_stock_input',
-                    label_visibility='collapsed'
+            # ── ADD STOCK SECTION ────────────────
+            st.markdown("---")
+            st.markdown("**➕ Stock Add Karo**")
+            add_c1, add_c2 = st.columns([1, 1])
+            with add_c1:
+                manual_sym = st.text_input(
+                    "Custom symbol likhein",
+                    placeholder="e.g. ZOMATO.NS, AAPL, BTC-USD",
+                    key="manual_sym"
                 )
-            with col_add2:
-                # Quick add from master list
-                QUICK_SYMBOLS = {
-                    "-- Quick Add --": "",
-                    "Nifty 50 (^NSEI)": "^NSEI",
-                    "Bank Nifty": "^NSEBANK",
-                    "Reliance": "RELIANCE.NS", "TCS": "TCS.NS",
-                    "Infosys": "INFY.NS", "HDFC Bank": "HDFCBANK.NS",
-                    "ICICI Bank": "ICICIBANK.NS", "SBI": "SBIN.NS",
-                    "Wipro": "WIPRO.NS", "Axis Bank": "AXISBANK.NS",
-                    "Kotak Bank": "KOTAKBANK.NS", "L&T": "LT.NS",
-                    "Bajaj Finance": "BAJFINANCE.NS", "Titan": "TITAN.NS",
-                    "Maruti": "MARUTI.NS", "Asian Paints": "ASIANPAINT.NS",
-                    "Sun Pharma": "SUNPHARMA.NS", "ITC": "ITC.NS",
-                    "HUL": "HINDUNILVR.NS", "Tata Motors": "TATAMOTORS.NS",
-                    "Tata Steel": "TATASTEEL.NS", "ONGC": "ONGC.NS",
-                    "Coal India": "COALINDIA.NS", "NTPC": "NTPC.NS",
-                    "Adani Ent.": "ADANIENT.NS", "Zomato": "ZOMATO.NS",
-                    "Paytm": "PAYTM.NS", "Nykaa": "NYKAA.NS",
-                    "Bitcoin": "BTC-USD", "Ethereum": "ETH-USD",
-                }
-                quick_sel = st.selectbox("Quick", list(QUICK_SYMBOLS.keys()),
-                                          key='quick_add', label_visibility='collapsed')
-            with col_add3:
-                if st.button("➕ Add", use_container_width=True, key='btn_add_stock'):
-                    # Priority: typed input > quick select
-                    sym_to_add = new_stock_input.strip().upper() if new_stock_input.strip() else QUICK_SYMBOLS.get(quick_sel, "")
-                    if sym_to_add and sym_to_add != "":
-                        if sym_to_add not in st.session_state.watchlists[selected_wl]:
-                            st.session_state.watchlists[selected_wl].append(sym_to_add)
-                            st.success(f"✅ {sym_to_add} add ho gaya!")
-                            st.rerun()
-                        else:
-                            st.warning(f"{sym_to_add} pehle se hai!")
+            with add_c2:
+                quick_sym_label = st.selectbox(
+                    "Ya list se choose karo",
+                    list(ALL_SYMBOLS.keys()),
+                    key="quick_sym"
+                )
+
+            if st.button("➕ ADD SYMBOL", use_container_width=True, type="primary"):
+                # Manual input has priority
+                sym = manual_sym.strip().upper() if manual_sym.strip() else ALL_SYMBOLS.get(quick_sym_label, "")
+                if sym and sym != "":
+                    if sym not in st.session_state.watchlists[active]:
+                        st.session_state.watchlists[active].append(sym)
+                        st.success(f"✅ {sym} add ho gaya!")
+                        st.rerun()
                     else:
-                        st.error("Symbol likhein ya select karo!")
-
-            # ── Stock List with Delete ────────────
-            st.markdown("##### 📃 Stocks in this Watchlist")
-            if not stocks:
-                st.info("Koi stock nahi. Upar se add karo!")
-            else:
-                # Show in grid — 3 per row
-                for i in range(0, len(stocks), 3):
-                    row_stocks = stocks[i:i+3]
-                    cols = st.columns(3)
-                    for j, stk in enumerate(row_stocks):
-                        with cols[j]:
-                            st.markdown(f"""
-                            <div style='background:#161b22; border:1px solid #30363d; border-radius:8px;
-                                        padding:10px 14px; margin:4px 0; display:flex;
-                                        justify-content:space-between; align-items:center;'>
-                                <span style='color:#e6edf3; font-family:monospace; font-weight:600;'>{stk}</span>
-                            </div>
-                            """, unsafe_allow_html=True)
-                            if st.button(f"🗑️ Remove", key=f"del_{selected_wl}_{stk}_{i}_{j}"):
-                                st.session_state.watchlists[selected_wl].remove(stk)
-                                st.success(f"{stk} remove ho gaya!")
-                                st.rerun()
-
-            # ── Use in Scanner ───────────────────
-            st.divider()
-            st.markdown("##### 🔍 Is Watchlist ko Scanner mein Use Karo")
-            col_s1, col_s2 = st.columns([2,1])
-            with col_s1:
-                scan_tf_wl = st.selectbox("Timeframe", list(TIMEFRAMES.keys()), index=5, key='wl_scan_tf')
-            with col_s2:
-                st.write("")
-                st.write("")
-                run_wl_scan = st.button("🚀 Scan Watchlist", use_container_width=True)
-
-            if run_wl_scan and stocks:
-                iv_wl, per_wl = TIMEFRAMES[scan_tf_wl]
-                wl_results = []
-                prog_wl = st.progress(0)
-                status_wl = st.empty()
-                for i, sym_wl in enumerate(stocks):
-                    status_wl.text(f"Scanning {sym_wl}...")
-                    df_wl = fetch_data(sym_wl, iv_wl, per_wl)
-                    if not df_wl.empty and len(df_wl) > lookback:
-                        prices_wl = df_wl['Close'].values.flatten().astype(float)
-                        _, up_wl, lo_wl = compute_nwe_endpoint(prices_wl, bandwidth, mult, min(lookback, len(prices_wl)-1))
-                        df_wl['upper'] = up_wl
-                        df_wl['lower'] = lo_wl
-                        df_wl = detect_signals(df_wl)
-                        last_wl = df_wl.iloc[-1]
-                        close_wl = float(last_wl['Close'])
-                        up_wl_v  = float(last_wl['upper']) if not np.isnan(last_wl['upper']) else 0
-                        lo_wl_v  = float(last_wl['lower']) if not np.isnan(last_wl['lower']) else 0
-                        sig_wl   = last_wl['signal'] if last_wl['signal'] else 'NEUTRAL'
-                        dist_up  = round((up_wl_v - close_wl) / close_wl * 100, 2) if up_wl_v else 0
-                        dist_lo  = round((close_wl - lo_wl_v) / close_wl * 100, 2) if lo_wl_v else 0
-                        wl_results.append({
-                            'Symbol': sym_wl,
-                            'Price':  f"₹{close_wl:,.2f}",
-                            'Upper':  f"₹{up_wl_v:,.2f}",
-                            'Lower':  f"₹{lo_wl_v:,.2f}",
-                            'Dist Upper%': f"{dist_up}%",
-                            'Dist Lower%': f"{dist_lo}%",
-                            'Signal': sig_wl,
-                            'Time':   str(df_wl.index[-1])[:16],
-                        })
-                    prog_wl.progress((i+1)/len(stocks))
-                status_wl.empty()
-                prog_wl.empty()
-
-                if wl_results:
-                    res_wl_df = pd.DataFrame(wl_results)
-                    def hl_sig(val):
-                        if val == 'BUY':  return 'background-color:#0d2818; color:#3fb950; font-weight:bold'
-                        if val == 'SELL': return 'background-color:#2d0f0f; color:#f85149; font-weight:bold'
-                        return 'color:#8b949e'
-                    st.dataframe(res_wl_df.style.map(hl_sig, subset=['Signal']),
-                                 use_container_width=True, height=350)
-
-                    # Alert check for watchlist
-                    buy_alerts  = res_wl_df[res_wl_df['Signal']=='BUY']['Symbol'].tolist()
-                    sell_alerts = res_wl_df[res_wl_df['Signal']=='SELL']['Symbol'].tolist()
-                    if buy_alerts:
-                        st.markdown(f'<div class="alert-buy">✅ BUY Signals: {", ".join(buy_alerts)}</div>', unsafe_allow_html=True)
-                    if sell_alerts:
-                        st.markdown(f'<div class="alert-sell">🔴 SELL Signals: {", ".join(sell_alerts)}</div>', unsafe_allow_html=True)
-
-                    st.download_button("⬇ Download Results", res_wl_df.to_csv(index=False),
-                                       f"{selected_wl}_scan.csv", "text/csv")
-            elif run_wl_scan:
-                st.warning("Pehle stocks add karo watchlist mein!")
-
-    # ── All Watchlists Overview ──────────────────
-    st.divider()
-    st.markdown("#### 📊 Sari Watchlists")
-    if st.session_state.watchlists:
-        for wl_name, wl_stocks in st.session_state.watchlists.items():
-            with st.expander(f"📂 {wl_name} ({len(wl_stocks)} stocks)"):
-                if wl_stocks:
-                    st.write(", ".join([f"`{s}`" for s in wl_stocks]))
+                        st.warning(f"⚠️ {sym} pehle se hai!")
                 else:
-                    st.write("_Koi stock nahi_")
+                    st.error("❌ Symbol likhein ya list se choose karo!")
+
+            # ── STOCK LIST WITH DELETE ───────────
+            st.markdown("---")
+            st.markdown("**📃 Stock List**")
+
+            if not stocks:
+                st.info("Koi stock nahi hai. Upar se add karo! ⬆️")
+            else:
+                # Delete All button
+                col_da, col_sp = st.columns([1, 3])
+                with col_da:
+                    if st.button("🗑️ Sab Delete", key="del_all"):
+                        st.session_state.watchlists[active] = []
+                        st.success("Sab stocks delete ho gaye!")
+                        st.rerun()
+
+                st.write("")
+
+                # Show each stock with delete button — clean rows
+                for idx_s, stk in enumerate(list(stocks)):
+                    c1, c2, c3 = st.columns([3, 1, 1])
+                    with c1:
+                        st.markdown(
+                            f"<div style='background:#161b22; border:1px solid #30363d; "
+                            f"border-radius:6px; padding:8px 14px; color:#e6edf3; "
+                            f"font-family:monospace; font-size:0.9rem;'>"
+                            f"<b>{idx_s+1}.</b> {stk}</div>",
+                            unsafe_allow_html=True
+                        )
+                    with c2:
+                        # View chart button
+                        if st.button("📊", key=f"chart_{stk}_{idx_s}", help=f"Chart dekhein: {stk}"):
+                            st.session_state['jump_symbol'] = stk
+                            st.info(f"Chart tab mein jaake {stk} select karo!")
+                    with c3:
+                        if st.button("🗑️", key=f"del_stk_{stk}_{idx_s}", help=f"Remove {stk}"):
+                            st.session_state.watchlists[active].remove(stk)
+                            st.success(f"✅ {stk} remove ho gaya!")
+                            st.rerun()
+                    st.write("")
+
+            # ── SCAN WATCHLIST ───────────────────
+            st.markdown("---")
+            st.markdown("**🚀 Watchlist Scan Karo**")
+            scan_c1, scan_c2 = st.columns([2, 1])
+            with scan_c1:
+                scan_tf_wl = st.selectbox("Timeframe", list(TIMEFRAMES.keys()), index=5, key='wl_scan_tf')
+            with scan_c2:
+                st.write("")
+                run_wl_scan = st.button("🚀 Scan Now", use_container_width=True, type="primary", key="run_wl_scan")
+
+            if run_wl_scan:
+                if not stocks:
+                    st.warning("Pehle stocks add karo!")
+                else:
+                    iv_wl, per_wl = TIMEFRAMES[scan_tf_wl]
+                    wl_results = []
+                    prog_wl = st.progress(0)
+                    status_wl = st.empty()
+                    for i_wl, sym_wl in enumerate(stocks):
+                        status_wl.text(f"Scanning {sym_wl}... ({i_wl+1}/{len(stocks)})")
+                        df_wl = fetch_data(sym_wl, iv_wl, per_wl)
+                        if not df_wl.empty and len(df_wl) > 50:
+                            prices_wl = df_wl['Close'].values.flatten().astype(float)
+                            lb_wl = min(lookback, len(prices_wl)-1)
+                            _, up_wl, lo_wl = compute_nwe_endpoint(prices_wl, bandwidth, mult, lb_wl)
+                            df_wl['upper'] = up_wl
+                            df_wl['lower'] = lo_wl
+                            df_wl = detect_signals(df_wl)
+                            last_wl  = df_wl.iloc[-1]
+                            close_wl = float(last_wl['Close'])
+                            up_v     = float(last_wl['upper']) if not np.isnan(last_wl['upper']) else 0
+                            lo_v     = float(last_wl['lower']) if not np.isnan(last_wl['lower']) else 0
+                            sig_wl   = last_wl['signal'] if last_wl['signal'] else 'NEUTRAL'
+                            dist_up  = round((up_v - close_wl) / close_wl * 100, 2) if up_v else 0
+                            dist_lo  = round((close_wl - lo_v) / close_wl * 100, 2) if lo_v else 0
+                            wl_results.append({
+                                'Symbol':      sym_wl,
+                                'Price':       f"₹{close_wl:,.2f}",
+                                'Upper Band':  f"₹{up_v:,.2f}",
+                                'Lower Band':  f"₹{lo_v:,.2f}",
+                                'Dist Upper%': f"{dist_up}%",
+                                'Dist Lower%': f"{dist_lo}%",
+                                'Signal':      sig_wl,
+                                'Time':        str(df_wl.index[-1])[:16],
+                            })
+                        prog_wl.progress((i_wl+1)/len(stocks))
+                    status_wl.empty()
+                    prog_wl.empty()
+
+                    if wl_results:
+                        res_wl = pd.DataFrame(wl_results)
+
+                        def hl_sig_wl(val):
+                            if val == 'BUY':     return 'background-color:#0d2818;color:#3fb950;font-weight:bold'
+                            if val == 'SELL':    return 'background-color:#2d0f0f;color:#f85149;font-weight:bold'
+                            return 'color:#8b949e'
+
+                        st.dataframe(res_wl.style.map(hl_sig_wl, subset=['Signal']),
+                                     use_container_width=True, height=min(400, len(wl_results)*60+50))
+
+                        # Alert summary
+                        buys  = res_wl[res_wl['Signal']=='BUY']['Symbol'].tolist()
+                        sells = res_wl[res_wl['Signal']=='SELL']['Symbol'].tolist()
+                        if buys:
+                            st.markdown(f'<div class="alert-buy">✅ BUY Signals: {" | ".join(buys)}</div>', unsafe_allow_html=True)
+                        if sells:
+                            st.markdown(f'<div class="alert-sell">🔴 SELL Signals: {" | ".join(sells)}</div>', unsafe_allow_html=True)
+                        if not buys and not sells:
+                            st.info("⚪ Koi active signal nahi — sabhi NEUTRAL hain.")
+
+                        st.download_button("⬇ CSV Download", res_wl.to_csv(index=False),
+                                           f"{active}_scan.csv", "text/csv")
 
 
 # ══════════════════════════════════════════════
