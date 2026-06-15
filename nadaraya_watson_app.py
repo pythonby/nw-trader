@@ -30,6 +30,29 @@ import os
 import math
 
 # ─────────────────────────────────────────────────────────────────
+# LOAD SECRETS (Streamlit Cloud) or .env (Local)
+# ─────────────────────────────────────────────────────────────────
+def get_secret(key, default=""):
+    # 1. Try Streamlit secrets (Streamlit Cloud pe)
+    try:
+        return st.secrets[key]
+    except:
+        pass
+    # 2. Try environment variable (local .env ke liye)
+    try:
+        import os
+        from dotenv import load_dotenv
+        load_dotenv()
+        return os.getenv(key, default)
+    except:
+        pass
+    return default
+
+# Pre-load secrets
+_PRESET_TOKEN   = get_secret("TG_TOKEN")
+_PRESET_CHAT_ID = get_secret("TG_CHAT_ID")
+
+# ─────────────────────────────────────────────────────────────────
 # PAGE CONFIG
 # ─────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -445,64 +468,284 @@ def build_chart(df: pd.DataFrame, symbol: str, tf: str) -> go.Figure:
 with st.sidebar:
     st.markdown("## ⚙️ Settings")
 
-    SYMBOL_LIST = {
-        "── Indian Indices ──":   None,
-        "📊 Nifty 50":            "^NSEI",
-        "📊 Nifty Bank":          "^NSEBANK",
-        "📊 Nifty IT":            "^CNXIT",
-        "📊 Nifty Midcap 100":    "^NSEMDCP100",
-        "📊 Nifty Auto":          "^CNXAUTO",
-        "📊 Nifty FMCG":          "^CNXFMCG",
-        "📊 Nifty Pharma":        "^CNXPHARMA",
-        "📊 Nifty Energy":        "^CNXENERGY",
-        "📊 Nifty Metal":         "^CNXMETAL",
-        "📊 Nifty Realty":        "^CNXREALTY",
-        "📊 Sensex (BSE)":        "^BSESN",
-        "📊 India VIX":           "^INDIAVIX",
-        "── F&O Futures ──":      None,
-        "📈 Nifty Futures":       "NIFTY50=F",
-        "📈 BankNifty Futures":   "BANKNIFTY=F",
-        "── Large Cap Stocks ──": None,
-        "🏢 Reliance":            "RELIANCE.NS",
-        "🏢 TCS":                 "TCS.NS",
-        "🏢 Infosys":             "INFY.NS",
-        "🏢 HDFC Bank":           "HDFCBANK.NS",
-        "🏢 ICICI Bank":          "ICICIBANK.NS",
-        "🏢 Axis Bank":           "AXISBANK.NS",
-        "🏢 SBI":                 "SBIN.NS",
-        "🏢 Wipro":               "WIPRO.NS",
-        "🏢 HCL Tech":            "HCLTECH.NS",
-        "🏢 Bajaj Finance":       "BAJFINANCE.NS",
-        "🏢 Kotak Bank":          "KOTAKBANK.NS",
-        "🏢 L&T":                 "LT.NS",
-        "🏢 Asian Paints":        "ASIANPAINT.NS",
-        "🏢 Maruti":              "MARUTI.NS",
-        "🏢 Titan":               "TITAN.NS",
-        "🏢 Sun Pharma":          "SUNPHARMA.NS",
-        "🏢 Tata Motors":         "TATAMOTORS.NS",
-        "🏢 Tata Steel":          "TATASTEEL.NS",
-        "🏢 ITC":                 "ITC.NS",
-        "🏢 HUL":                 "HINDUNILVR.NS",
-        "🏢 ONGC":                "ONGC.NS",
-        "🏢 Coal India":          "COALINDIA.NS",
-        "🏢 NTPC":                "NTPC.NS",
-        "🏢 Power Grid":          "POWERGRID.NS",
-        "🏢 Adani Enterprises":   "ADANIENT.NS",
-        "🏢 Adani Ports":         "ADANIPORTS.NS",
-        "🏢 M&M":                 "M&M.NS",
-        "🏢 Hero MotoCorp":       "HEROMOTOCO.NS",
-        "🏢 Eicher Motors":       "EICHERMOT.NS",
-        "🏢 IndusInd Bank":       "INDUSINDBK.NS",
-        "🏢 Dr Reddy's":          "DRREDDY.NS",
-        "🏢 Cipla":               "CIPLA.NS",
-        "🏢 Nestle India":        "NESTLEIND.NS",
-        "🏢 UltraTech Cement":    "ULTRACEMCO.NS",
-        "── Crypto ──":           None,
-        "₿ Bitcoin (BTC)":        "BTC-USD",
-        "₿ Ethereum (ETH)":       "ETH-USD",
-        "── Custom ──":           None,
-        "✏️ Custom Symbol...":    "CUSTOM",
+    # ═══════════════════════════════════════════════
+    # MASTER INDEX & STOCK DATABASE
+    # ═══════════════════════════════════════════════
+    INDEX_DATABASE = {
+        # ── NIFTY INDICES ──────────────────────────
+        "🏆 NIFTY INDICES": {
+            "Nifty 50":           "^NSEI",
+            "Nifty Next 50":      "^NSMIDCP",
+            "Nifty 100":          "^CNX100",
+            "Nifty 200":          "^CNX200",
+            "Nifty 500":          "^CNX500",
+            "Nifty Midcap 50":    "^NSEMDCP50",
+            "Nifty Midcap 100":   "^NSEMDCP100",
+            "Nifty Midcap 150":   "NIFTY_MID_SELECT.NS",
+            "Nifty Smallcap 50":  "^CNXSC",
+            "Nifty Smallcap 100": "NIFTY_SMLCAP100.NS",
+            "Nifty Smallcap 250": "NIFTY_SMLCAP250.NS",
+            "Nifty LargeMidcap":  "NIFTY_LARGEMID250.NS",
+            "Nifty MicroCap 250": "NIFTY_MICROCAP250.NS",
+            "Nifty Total Market": "NIFTY_TOTAL_MKT.NS",
+            "Sensex (BSE 30)":    "^BSESN",
+            "BSE 100":            "BSE-100.BO",
+            "BSE 200":            "BSE-200.BO",
+            "BSE 500":            "BSE-500.BO",
+            "India VIX":          "^INDIAVIX",
+        },
+        # ── NIFTY SECTOR INDICES ────────────────────
+        "🏭 NIFTY SECTORS": {
+            "Bank Nifty":         "^NSEBANK",
+            "Nifty IT":           "^CNXIT",
+            "Nifty Auto":         "^CNXAUTO",
+            "Nifty Pharma":       "^CNXPHARMA",
+            "Nifty FMCG":         "^CNXFMCG",
+            "Nifty Metal":        "^CNXMETAL",
+            "Nifty Energy":       "^CNXENERGY",
+            "Nifty Realty":       "^CNXREALTY",
+            "Nifty Media":        "^CNXMEDIA",
+            "Nifty Infra":        "^CNXINFRA",
+            "Nifty PSU Bank":     "^CNXPSUBANK",
+            "Nifty Private Bank": "NIFTY_PVT_BANK.NS",
+            "Nifty Financial":    "^CNXFINANCE",
+            "Nifty Healthcare":   "NIFTY_HEALTH.NS",
+            "Nifty Consumer Dur": "NIFTY_CONSR_DURBL.NS",
+            "Nifty Oil & Gas":    "NIFTY_OIL_AND_GAS.NS",
+            "Nifty Chemicals":    "NIFTY_INDIA_CHEMICAL.NS",
+            "Nifty Defence":      "NIFTY_INDIA_DEFENCE.NS",
+            "Nifty MNC":          "^CNXMNC",
+            "Nifty Services":     "^CNXSERVICE",
+            "Nifty Commodities":  "^CNXCMDT",
+            "Nifty Div Opps 50":  "^CNXDIVOP",
+        },
+        # ── F&O FUTURES ────────────────────────────
+        "📈 F&O FUTURES": {
+            "Nifty 50 Futures":      "NIFTY50=F",
+            "BankNifty Futures":     "BANKNIFTY=F",
+            "FinNifty Futures":      "FINNIFTY=F",
+            "MidcapNifty Futures":   "MIDCPNIFTY=F",
+            "Sensex Futures":        "SENSEX=F",
+        },
+        # ── NIFTY 50 STOCKS ────────────────────────
+        "🏢 NIFTY 50 STOCKS": {
+            "Reliance":          "RELIANCE.NS",
+            "TCS":               "TCS.NS",
+            "HDFC Bank":         "HDFCBANK.NS",
+            "Infosys":           "INFY.NS",
+            "ICICI Bank":        "ICICIBANK.NS",
+            "Bajaj Finance":     "BAJFINANCE.NS",
+            "Wipro":             "WIPRO.NS",
+            "HCL Tech":          "HCLTECH.NS",
+            "L&T":               "LT.NS",
+            "Kotak Bank":        "KOTAKBANK.NS",
+            "Axis Bank":         "AXISBANK.NS",
+            "SBI":               "SBIN.NS",
+            "Asian Paints":      "ASIANPAINT.NS",
+            "Maruti":            "MARUTI.NS",
+            "Titan":             "TITAN.NS",
+            "Sun Pharma":        "SUNPHARMA.NS",
+            "ITC":               "ITC.NS",
+            "HUL":               "HINDUNILVR.NS",
+            "Power Grid":        "POWERGRID.NS",
+            "NTPC":              "NTPC.NS",
+            "Tata Motors":       "TATAMOTORS.NS",
+            "Tata Steel":        "TATASTEEL.NS",
+            "JSW Steel":         "JSWSTEEL.NS",
+            "Hindalco":          "HINDALCO.NS",
+            "UltraTech Cement":  "ULTRACEMCO.NS",
+            "Nestle India":      "NESTLEIND.NS",
+            "Adani Ports":       "ADANIPORTS.NS",
+            "Adani Ent.":        "ADANIENT.NS",
+            "Coal India":        "COALINDIA.NS",
+            "ONGC":              "ONGC.NS",
+            "BPCL":              "BPCL.NS",
+            "Dr Reddys":         "DRREDDY.NS",
+            "Cipla":             "CIPLA.NS",
+            "Eicher Motors":     "EICHERMOT.NS",
+            "Hero MotoCorp":     "HEROMOTOCO.NS",
+            "M&M":               "M&M.NS",
+            "IndusInd Bank":     "INDUSINDBK.NS",
+            "Shriram Finance":   "SHRIRAMFIN.NS",
+            "Bajaj Auto":        "BAJAJ-AUTO.NS",
+            "Bajaj Finserv":     "BAJAJFINSV.NS",
+            "BEL":               "BEL.NS",
+            "Trent":             "TRENT.NS",
+            "Grasim":            "GRASIM.NS",
+            "Britannia":         "BRITANNIA.NS",
+            "Divis Lab":         "DIVISLAB.NS",
+            "Apollo Hospitals":  "APOLLOHOSP.NS",
+            "Tata Consumer":     "TATACONSUM.NS",
+            "Cipla":             "CIPLA.NS",
+            "IOC":               "IOC.NS",
+        },
+        # ── NIFTY NEXT 50 ──────────────────────────
+        "🥈 NIFTY NEXT 50": {
+            "Zomato":            "ZOMATO.NS",
+            "Adani Green":       "ADANIGREEN.NS",
+            "Adani Total Gas":   "ATGL.NS",
+            "Adani Trans.":      "ADANITRANS.NS",
+            "Ambuja Cement":     "AMBUJACEM.NS",
+            "ACC":               "ACC.NS",
+            "Astral":            "ASTRAL.NS",
+            "Avenue Supermarts": "DMART.NS",
+            "Berger Paints":     "BERGEPAINT.NS",
+            "Bosch":             "BOSCHLTD.NS",
+            "Cholaman. Inv.":    "CHOLAFIN.NS",
+            "Colgate":           "COLPAL.NS",
+            "Cummins India":     "CUMMINSIND.NS",
+            "DLF":               "DLF.NS",
+            "Godrej Consumer":   "GODREJCP.NS",
+            "Havells":           "HAVELLS.NS",
+            "HDFC Life":         "HDFCLIFE.NS",
+            "ICICI Lombard":     "ICICIGI.NS",
+            "ICICI Pru Life":    "ICICIPRULI.NS",
+            "Info Edge":         "NAUKRI.NS",
+            "Interglobe":        "INDIGO.NS",
+            "LTIMindtree":       "LTIM.NS",
+            "Lupin":             "LUPIN.NS",
+            "Mankind Pharma":    "MANKIND.NS",
+            "Marico":            "MARICO.NS",
+            "MRF":               "MRF.NS",
+            "Muthoot Finance":   "MUTHOOTFIN.NS",
+            "Nykaa":             "NYKAA.NS",
+            "Paytm":             "PAYTM.NS",
+            "PFC":               "PFC.NS",
+            "PI Industries":     "PIIND.NS",
+            "Pidilite":          "PIDILITIND.NS",
+            "REC":               "RECLTD.NS",
+            "SBI Cards":         "SBICARD.NS",
+            "SBI Life":          "SBILIFE.NS",
+            "Siemens":           "SIEMENS.NS",
+            "Tata Power":        "TATAPOWER.NS",
+            "Torrent Pharma":    "TORNTPHARM.NS",
+            "TVS Motor":         "TVSMOTOR.NS",
+            "Vedanta":           "VEDL.NS",
+            "Voltas":            "VOLTAS.NS",
+            "Wipro":             "WIPRO.NS",
+            "Zydus Lifesciences":"ZYDUSLIFE.NS",
+        },
+        # ── BANKING SECTOR ──────────────────────────
+        "🏦 BANKING": {
+            "HDFC Bank":         "HDFCBANK.NS",
+            "ICICI Bank":        "ICICIBANK.NS",
+            "SBI":               "SBIN.NS",
+            "Axis Bank":         "AXISBANK.NS",
+            "Kotak Bank":        "KOTAKBANK.NS",
+            "IndusInd Bank":     "INDUSINDBK.NS",
+            "Bank of Baroda":    "BANKBARODA.NS",
+            "PNB":               "PNB.NS",
+            "Federal Bank":      "FEDERALBNK.NS",
+            "IDFC First":        "IDFCFIRSTB.NS",
+            "Yes Bank":          "YESBANK.NS",
+            "AU Small Finance":  "AUBANK.NS",
+            "Canara Bank":       "CANBK.NS",
+            "Union Bank":        "UNIONBANK.NS",
+            "Indian Bank":       "INDIANB.NS",
+        },
+        # ── IT SECTOR ───────────────────────────────
+        "💻 IT / TECH": {
+            "TCS":               "TCS.NS",
+            "Infosys":           "INFY.NS",
+            "Wipro":             "WIPRO.NS",
+            "HCL Tech":          "HCLTECH.NS",
+            "Tech Mahindra":     "TECHM.NS",
+            "LTIMindtree":       "LTIM.NS",
+            "Mphasis":           "MPHASIS.NS",
+            "Persistent Sys":    "PERSISTENT.NS",
+            "Coforge":           "COFORGE.NS",
+            "KPIT Tech":         "KPITTECH.NS",
+            "Tata Elxsi":        "TATAELXSI.NS",
+            "Hexaware":          "HEXAWARE.NS",
+            "Info Edge":         "NAUKRI.NS",
+            "Zensar Tech":       "ZENSARTECH.NS",
+        },
+        # ── PHARMA ──────────────────────────────────
+        "💊 PHARMA": {
+            "Sun Pharma":        "SUNPHARMA.NS",
+            "Dr Reddys":         "DRREDDY.NS",
+            "Cipla":             "CIPLA.NS",
+            "Divis Lab":         "DIVISLAB.NS",
+            "Lupin":             "LUPIN.NS",
+            "Torrent Pharma":    "TORNTPHARM.NS",
+            "Mankind Pharma":    "MANKIND.NS",
+            "Apollo Hospitals":  "APOLLOHOSP.NS",
+            "Zydus Life":        "ZYDUSLIFE.NS",
+            "Aurobindo":         "AUROPHARMA.NS",
+            "Alkem Lab":         "ALKEM.NS",
+            "Glenmark":          "GLENMARK.NS",
+            "Ipca Lab":          "IPCALAB.NS",
+        },
+        # ── AUTO ────────────────────────────────────
+        "🚗 AUTO": {
+            "Maruti":            "MARUTI.NS",
+            "Tata Motors":       "TATAMOTORS.NS",
+            "M&M":               "M&M.NS",
+            "Hero MotoCorp":     "HEROMOTOCO.NS",
+            "Bajaj Auto":        "BAJAJ-AUTO.NS",
+            "Eicher Motors":     "EICHERMOT.NS",
+            "TVS Motor":         "TVSMOTOR.NS",
+            "Ashok Leyland":     "ASHOKLEY.NS",
+            "Bosch":             "BOSCHLTD.NS",
+            "Motherson Sumi":    "MOTHERSON.NS",
+            "MRF":               "MRF.NS",
+            "Apollo Tyres":      "APOLLOTYRE.NS",
+            "Exide":             "EXIDEIND.NS",
+        },
+        # ── ENERGY / OIL ────────────────────────────
+        "⚡ ENERGY": {
+            "Reliance":          "RELIANCE.NS",
+            "ONGC":              "ONGC.NS",
+            "BPCL":              "BPCL.NS",
+            "IOC":               "IOC.NS",
+            "NTPC":              "NTPC.NS",
+            "Power Grid":        "POWERGRID.NS",
+            "Tata Power":        "TATAPOWER.NS",
+            "Adani Green":       "ADANIGREEN.NS",
+            "Adani Power":       "ADANIPOWER.NS",
+            "Coal India":        "COALINDIA.NS",
+            "NHPC":              "NHPC.NS",
+            "GAIL":              "GAIL.NS",
+            "Petronet LNG":      "PETRONET.NS",
+        },
+        # ── CRYPTO ──────────────────────────────────
+        "₿ CRYPTO": {
+            "Bitcoin":           "BTC-USD",
+            "Ethereum":          "ETH-USD",
+            "BNB":               "BNB-USD",
+            "XRP":               "XRP-USD",
+            "Solana":            "SOL-USD",
+            "Dogecoin":          "DOGE-USD",
+        },
+        # ── CUSTOM ──────────────────────────────────
+        "✏️ CUSTOM": {
+            "Custom Symbol...":  "CUSTOM",
+        },
     }
+
+    # Flatten for dropdown
+    all_categories = list(INDEX_DATABASE.keys())
+    sel_category = st.selectbox(
+        "📂 Category / Sector",
+        all_categories,
+        index=0,
+        help="Index, Sector, ya Stock category choose karo"
+    )
+
+    sym_options = INDEX_DATABASE[sel_category]
+    sel_sym_label = st.selectbox(
+        "📌 Symbol / Index",
+        list(sym_options.keys()),
+        help="Symbol choose karo"
+    )
+    selected_val = sym_options[sel_sym_label]
+
+    if selected_val == "CUSTOM":
+        symbol = st.text_input("Custom Symbol likhein", value="RELIANCE.NS",
+                               help="NSE: .NS | BSE: .BO | US: AAPL | Crypto: BTC-USD").upper()
+    else:
+        symbol = selected_val
+        st.caption(f"Yahoo ticker: `{symbol}`")
 
     valid_labels = [k for k, v in SYMBOL_LIST.items() if v is not None]
     selected_label = st.selectbox(
@@ -904,74 +1147,255 @@ with tab_scanner:
 # TAB 4: ALERTS
 # ══════════════════════════════════════════════
 with tab_alerts:
-    st.markdown("### 🔔 Alert Monitor")
-    st.markdown("""
-    **Alert Logic (from Pine Script):**
-    - 🟢 **BUY Alert** — Candle closes ABOVE lower band after touching/crossing it
-    - 🔴 **SELL Alert** — Candle touches or crosses ABOVE upper band
-    """)
+    st.markdown("### 🔔 NW Band Scanner — Alert System")
 
-    col_al, col_ar = st.columns([2, 1])
-    with col_al:
-        alert_tf = st.selectbox("Alert Timeframe", list(TIMEFRAMES.keys()), index=5, key='alert_tf')
-    with col_ar:
-        st.write("")
-        st.write("")
-        check_alerts = st.button("🔍 Check Alerts Now", use_container_width=True)
+    # ── Telegram Setup ───────────────────────────
+    with st.expander("📱 Telegram Setup Guide (Click here)", expanded=False):
+        st.markdown("""
+        **Step 1** — Telegram mein **@BotFather** search karo → `/newbot` → Token copy karo
+        **Step 2** — **@userinfobot** search karo → `/start` → Chat ID copy karo
+        **Step 3** — Neeche Token + Chat ID paste karo → Save karo
+        **Step 4** — Test Alert bhejo → Phone pe message aayega! 🎉
+        """)
 
-    # Session alert log
+    # ── Telegram Config ──────────────────────────
+    st.markdown("#### 📱 Telegram Configuration")
+    if 'tg_token'   not in st.session_state:
+        st.session_state.tg_token   = _PRESET_TOKEN
+    if 'tg_chat_id' not in st.session_state:
+        st.session_state.tg_chat_id = _PRESET_CHAT_ID
+
+    tg_c1, tg_c2 = st.columns(2)
+    with tg_c1:
+        tg_token_input = st.text_input("🤖 Bot Token", value=st.session_state.tg_token,
+            placeholder="7123456789:AAGxxxxx", type="password")
+    with tg_c2:
+        tg_chat_input = st.text_input("💬 Chat ID", value=st.session_state.tg_chat_id,
+            placeholder="987654321")
+
+    btn1, btn2, _ = st.columns([1,1,2])
+    with btn1:
+        if st.button("💾 Save", use_container_width=True, type="primary"):
+            st.session_state.tg_token   = tg_token_input.strip()
+            st.session_state.tg_chat_id = tg_chat_input.strip()
+            st.success("✅ Saved!")
+    with btn2:
+        if st.button("📨 Test", use_container_width=True):
+            if st.session_state.tg_token and st.session_state.tg_chat_id:
+                try:
+                    r = requests.post(
+                        f"https://api.telegram.org/bot{st.session_state.tg_token}/sendMessage",
+                        json={"chat_id": st.session_state.tg_chat_id,
+                              "text": "✅ <b>NW Band Scanner</b>\nBot connected! Alerts milne shuru honge 🎉",
+                              "parse_mode": "HTML"}, timeout=10)
+                    if r.status_code == 200: st.success("✅ Telegram pe message gaya!")
+                    else: st.error(f"❌ Error: {r.text}")
+                except Exception as e: st.error(f"❌ {e}")
+            else: st.warning("Pehle Token aur Chat ID save karo!")
+
+    tg_ok = bool(st.session_state.tg_token and st.session_state.tg_chat_id)
+    if _PRESET_TOKEN:
+        st.caption("🔐 Token Streamlit Secrets se load hua — secure!")
+    if tg_ok:
+        st.markdown('<div class="alert-buy">✅ Telegram Connected — Alerts phone pe milenge!</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="alert-sell">⚠️ Telegram setup nahi hua!</div>', unsafe_allow_html=True)
+
+    st.divider()
+
+    # ══════════════════════════════════════════════
+    # MULTI-TIMEFRAME ALERT SETUP
+    # ══════════════════════════════════════════════
+    st.markdown("#### ⚙️ Multi-Timeframe Alert Setup")
+    st.markdown("Alag alag timeframe pe **alag alert conditions** set karo!")
+
+    # Alert source
+    al_src_c1, al_src_c2 = st.columns([1,1])
+    with al_src_c1:
+        alert_source = st.radio("📂 Kiske liye alert?",
+            ["✅ Selected Symbol", "📋 Meri Watchlist"], key="alert_source2")
+    with al_src_c2:
+        if alert_source == "📋 Meri Watchlist" and 'watchlists' in st.session_state and st.session_state.watchlists:
+            alert_wl = st.selectbox("Watchlist select karo",
+                list(st.session_state.watchlists.keys()), key="alert_wl2")
+        else:
+            alert_wl = None
+
+    st.markdown("---")
+
+    # ── Multi-TF Alert Rules ─────────────────────
+    st.markdown("**📋 Timeframe-wise Alert Rules:**")
+    st.caption("Har timeframe ke liye alag BUY/SELL alert set kar sakte ho")
+
+    # Init alert rules
+    if 'alert_rules' not in st.session_state:
+        st.session_state.alert_rules = [
+            {"tf": "5m",  "buy": True,  "sell": True,  "active": True},
+            {"tf": "15m", "buy": True,  "sell": True,  "active": True},
+            {"tf": "1H",  "buy": True,  "sell": True,  "active": True},
+            {"tf": "4H",  "buy": False, "sell": False, "active": False},
+            {"tf": "1D",  "buy": False, "sell": False, "active": False},
+        ]
+
+    # Show rules table
+    header_cols = st.columns([1.5, 1, 1, 1])
+    header_cols[0].markdown("**⏱ Timeframe**")
+    header_cols[1].markdown("**✅ BUY Alert**")
+    header_cols[2].markdown("**🔴 SELL Alert**")
+    header_cols[3].markdown("**🔘 Active**")
+
+    updated_rules = []
+    for i, rule in enumerate(st.session_state.alert_rules):
+        rc = st.columns([1.5, 1, 1, 1])
+        with rc[0]:
+            tf_sel = st.selectbox("", list(TIMEFRAMES.keys()),
+                index=list(TIMEFRAMES.keys()).index(rule["tf"]) if rule["tf"] in TIMEFRAMES else 0,
+                key=f"rule_tf_{i}", label_visibility="collapsed")
+        with rc[1]:
+            buy_en = st.checkbox("BUY", value=rule["buy"], key=f"rule_buy_{i}", label_visibility="collapsed")
+        with rc[2]:
+            sell_en = st.checkbox("SELL", value=rule["sell"], key=f"rule_sell_{i}", label_visibility="collapsed")
+        with rc[3]:
+            active_en = st.checkbox("ON", value=rule["active"], key=f"rule_active_{i}", label_visibility="collapsed")
+        updated_rules.append({"tf": tf_sel, "buy": buy_en, "sell": sell_en, "active": active_en})
+
+    st.session_state.alert_rules = updated_rules
+
+    # Add/Remove rule buttons
+    add_c1, add_c2, _ = st.columns([1,1,2])
+    with add_c1:
+        if st.button("➕ Row Add Karo") and len(st.session_state.alert_rules) < 8:
+            st.session_state.alert_rules.append({"tf": "1D", "buy": True, "sell": True, "active": True})
+            st.rerun()
+    with add_c2:
+        if st.button("➖ Row Hatao") and len(st.session_state.alert_rules) > 1:
+            st.session_state.alert_rules.pop()
+            st.rerun()
+
+    # Active rules summary
+    active_rules = [r for r in st.session_state.alert_rules if r["active"]]
+    if active_rules:
+        summary = " | ".join([f"{'✅' if r['buy'] else ''}{'🔴' if r['sell'] else ''} {r['tf']}" for r in active_rules])
+        st.caption(f"Active rules: {summary}")
+
+    st.divider()
+
+    # ── Run Alert Check ──────────────────────────
+    check_col1, check_col2 = st.columns([2,1])
+    with check_col1:
+        st.markdown("**🚀 Alert Check Karo**")
+        st.caption("Sab active timeframes ek saath check honge")
+    with check_col2:
+        check_alerts = st.button("🔍 Check Now", use_container_width=True, type="primary")
+
     if 'alert_log' not in st.session_state:
         st.session_state.alert_log = []
 
+    def send_telegram_msg(token, chat_id, text):
+        try:
+            r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=10)
+            return r.status_code == 200
+        except: return False
+
     if check_alerts:
-        iv_al, per_al = TIMEFRAMES[alert_tf]
-        df_al = fetch_data(symbol, iv_al, per_al)
-        if not df_al.empty:
-            prices_al = df_al['Close'].values.flatten().astype(float)
-            _, up_al, lo_al = compute_nwe_endpoint(prices_al, bandwidth, mult, lookback)
-            df_al['upper'] = up_al
-            df_al['lower'] = lo_al
-            df_al = detect_signals(df_al)
-
-            # Last N signals
-            recent = df_al[df_al['signal'].isin(['BUY','SELL','SELL_CROSS_LOWER'])].tail(10)
-            if recent.empty:
-                st.info("No recent signals found.")
+        active_rules = [r for r in st.session_state.alert_rules if r["active"]]
+        if not active_rules:
+            st.warning("⚠️ Koi active rule nahi! Upar timeframe rules mein 'ON' karo.")
+        else:
+            # Determine symbols
+            if alert_source == "📋 Meri Watchlist" and alert_wl and 'watchlists' in st.session_state:
+                check_syms = st.session_state.watchlists.get(alert_wl, [symbol])
             else:
-                for idx, row in recent.iterrows():
-                    ts    = str(idx)[:16]
-                    price = round(float(row['Close']), 2)
-                    sig   = row['signal']
-                    if sig == 'BUY' and alert_lower:
-                        msg = f"✅ BUY — {symbol} @ ₹{price:,}  [{ts}]  Candle bounced above Lower Band"
-                        st.markdown(f'<div class="alert-buy">{msg}</div>', unsafe_allow_html=True)
-                        st.session_state.alert_log.append({'type':'BUY','symbol':symbol,'price':price,'time':ts})
-                    elif sig in ('SELL','SELL_CROSS_LOWER') and alert_upper:
-                        msg = f"🔴 SELL — {symbol} @ ₹{price:,}  [{ts}]  Candle touched Upper Band"
-                        st.markdown(f'<div class="alert-sell">{msg}</div>', unsafe_allow_html=True)
-                        st.session_state.alert_log.append({'type':'SELL','symbol':symbol,'price':price,'time':ts})
+                check_syms = [symbol]
 
-                # Webhook / Telegram
-                if webhook_url.strip():
-                    for _, row in recent.iterrows():
-                        msg_text = f"[NW Alert] {row['signal']} {symbol} @ {round(float(row['Close']),2)} [{str(row.name)[:16]}]"
-                        try:
-                            import requests
-                            requests.post(webhook_url, json={"text": msg_text}, timeout=5)
-                            st.success(f"📡 Sent to webhook: {msg_text}")
-                        except Exception as e:
-                            st.error(f"Webhook failed: {e}")
+            all_alerts = []
+            total_checks = len(active_rules) * len(check_syms)
+            prog = st.progress(0)
+            status = st.empty()
+            count = 0
 
-    # Alert history
+            for rule in active_rules:
+                tf_rule = rule["tf"]
+                iv_rule, per_rule = TIMEFRAMES[tf_rule]
+
+                for sym_al in check_syms:
+                    status.text(f"⏳ Checking {sym_al} on {tf_rule}...")
+                    df_al = fetch_data(sym_al, iv_rule, per_rule)
+
+                    if not df_al.empty and len(df_al) > 50:
+                        prices_al = df_al['Close'].values.flatten().astype(float)
+                        lb_al = min(lookback, len(prices_al)-1)
+                        _, up_al, lo_al = compute_nwe_endpoint(prices_al, bandwidth, mult, lb_al)
+                        df_al['upper'] = up_al
+                        df_al['lower'] = lo_al
+                        df_al = detect_signals(df_al)
+
+                        last_al = df_al.iloc[-1]
+                        price_al = round(float(last_al['Close']), 2)
+                        sig_al   = last_al['signal']
+                        ts_al    = str(df_al.index[-1])[:16]
+
+                        if sig_al == 'BUY' and rule["buy"]:
+                            all_alerts.append({
+                                'type': 'BUY', 'symbol': sym_al,
+                                'price': price_al, 'time': ts_al, 'tf': tf_rule,
+                                'msg': f"📈 <b>NW Band Scanner</b>\n━━━━━━━━━━━━━\n✅ <b>BUY SIGNAL</b>\n📌 {sym_al}\n⏱ Timeframe: {tf_rule}\n💰 ₹{price_al:,}\n🕐 {ts_al}\n📊 Lower Band Touch\n━━━━━━━━━━━━━"
+                            })
+                        elif sig_al in ('SELL','SELL_CROSS_LOWER') and rule["sell"]:
+                            all_alerts.append({
+                                'type': 'SELL', 'symbol': sym_al,
+                                'price': price_al, 'time': ts_al, 'tf': tf_rule,
+                                'msg': f"📉 <b>NW Band Scanner</b>\n━━━━━━━━━━━━━\n🔴 <b>SELL SIGNAL</b>\n📌 {sym_al}\n⏱ Timeframe: {tf_rule}\n💰 ₹{price_al:,}\n🕐 {ts_al}\n📊 Upper Band Touch\n━━━━━━━━━━━━━"
+                            })
+
+                    count += 1
+                    prog.progress(count / total_checks)
+
+            status.empty()
+            prog.empty()
+
+            if all_alerts:
+                st.markdown(f"#### 🔔 {len(all_alerts)} Alert(s) Found!")
+                for al in all_alerts:
+                    if al['type'] == 'BUY':
+                        st.markdown(
+                            f'<div class="alert-buy">✅ <b>BUY</b> — {al["symbol"]} | ⏱ {al["tf"]} | 💰 ₹{al["price"]:,} | 🕐 {al["time"]}</div>',
+                            unsafe_allow_html=True)
+                    else:
+                        st.markdown(
+                            f'<div class="alert-sell">🔴 <b>SELL</b> — {al["symbol"]} | ⏱ {al["tf"]} | 💰 ₹{al["price"]:,} | 🕐 {al["time"]}</div>',
+                            unsafe_allow_html=True)
+                    if tg_ok:
+                        ok = send_telegram_msg(st.session_state.tg_token, st.session_state.tg_chat_id, al['msg'])
+                        if ok: st.caption(f"  📱 Telegram sent: {al['symbol']} {al['tf']}")
+                    st.session_state.alert_log.append(al)
+            else:
+                st.info(f"⚪ {len(check_syms)} symbols × {len(active_rules)} timeframes checked — Koi signal nahi.")
+                if tg_ok:
+                    send_telegram_msg(st.session_state.tg_token, st.session_state.tg_chat_id,
+                        f"📊 <b>NW Band Scanner</b>\n⚪ Scan Complete\nSymbols: {', '.join(check_syms[:5])}\nKoi signal nahi mila.")
+
+    # ── Alert Log ────────────────────────────────
     if st.session_state.alert_log:
-        st.markdown("#### 📋 Alert History (this session)")
-        log_df = pd.DataFrame(st.session_state.alert_log[::-1])
-        st.dataframe(log_df, use_container_width=True, height=250)
+        st.divider()
+        st.markdown(f"#### 📋 Alert History ({len(st.session_state.alert_log)})")
+        log_df = pd.DataFrame([{
+            'Time': a['time'], 'Type': a['type'],
+            'Symbol': a['symbol'], 'TF': a.get('tf',''), 'Price': f"₹{a['price']:,}"
+        } for a in st.session_state.alert_log[::-1]])
+
+        def hl_log(val):
+            if val == 'BUY':  return 'background-color:#0d2818;color:#3fb950;font-weight:bold'
+            if val == 'SELL': return 'background-color:#2d0f0f;color:#f85149;font-weight:bold'
+            return ''
+        st.dataframe(log_df.style.map(hl_log, subset=['Type']),
+                     use_container_width=True, height=250)
         if st.button("🗑 Clear History"):
             st.session_state.alert_log = []
             st.rerun()
 
-# ══════════════════════════════════════════════
+
 # TAB 5: WATCHLIST MANAGER
 # ══════════════════════════════════════════════
 with tab_watchlist:
