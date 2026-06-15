@@ -616,73 +616,138 @@ with tab_chart:
 # ══════════════════════════════════════════════
 with tab_backtest:
     st.markdown("### 🧪 Backtest Engine")
-    col_a, col_b = st.columns([2, 1])
-    with col_a:
-        bt_tf = st.selectbox("Backtest Timeframe", list(TIMEFRAMES.keys()), index=5, key="bt_tf")
-    with col_b:
+
+    # ── Period + Timeframe Selection ─────────────
+    BACKTEST_PERIODS = {
+        "1 Month":   30,
+        "3 Months":  90,
+        "6 Months":  180,
+        "9 Months":  270,
+        "1 Year":    365,
+        "2 Years":   730,
+        "3 Years":   1095,
+        "5 Years":   1825,
+        "Max Data":  0,   # 0 = use full data
+    }
+
+    bt_c1, bt_c2, bt_c3 = st.columns([2, 2, 1])
+    with bt_c1:
+        bt_tf = st.selectbox("⏱ Timeframe", list(TIMEFRAMES.keys()), index=6, key="bt_tf")
+    with bt_c2:
+        bt_period_label = st.selectbox(
+            "📅 Backtest Period",
+            list(BACKTEST_PERIODS.keys()),
+            index=2,   # default: 6 Months
+            key="bt_period"
+        )
+    with bt_c3:
         st.write("")
         st.write("")
-        run_bt = st.button("▶ Run Backtest", use_container_width=True)
+        run_bt = st.button("▶ Run", use_container_width=True, type="primary")
+
+    # Period info
+    period_days = BACKTEST_PERIODS[bt_period_label]
+    if period_days > 0:
+        from datetime import timedelta
+        end_date   = datetime.now()
+        start_date = end_date - timedelta(days=period_days)
+        st.caption(f"📅 Period: **{start_date.strftime('%d %b %Y')}** → **{end_date.strftime('%d %b %Y')}** ({bt_period_label})")
+    else:
+        st.caption("📅 Period: **Maximum available data**")
 
     if run_bt:
         iv_bt, period_bt = TIMEFRAMES[bt_tf]
-        with st.spinner("Running backtest..."):
+        with st.spinner(f"Running backtest — {bt_period_label} — {symbol}..."):
             df_bt = fetch_data(symbol, iv_bt, period_bt)
             if df_bt.empty:
-                st.error("No data for backtest.")
+                st.error("❌ No data. Symbol ya timeframe check karo.")
             else:
-                prices_bt = df_bt['Close'].values.flatten().astype(float)
-                nwe_bt, up_bt, lo_bt = compute_nwe_endpoint(prices_bt, bandwidth, mult, lookback)
-                df_bt['nwe']   = nwe_bt
-                df_bt['upper'] = up_bt
-                df_bt['lower'] = lo_bt
-                df_bt = detect_signals(df_bt)
-                trades_df, stats, equity_curve = run_backtest(df_bt, float(capital))
+                # ── Filter by selected period ──
+                if period_days > 0:
+                    cutoff = pd.Timestamp.now(tz=df_bt.index.tz) - pd.Timedelta(days=period_days)
+                    df_bt = df_bt[df_bt.index >= cutoff]
 
-                if stats:
-                    st.markdown("#### 📊 Performance Summary")
-                    cols = st.columns(4)
-                    stat_items = list(stats.items())
-                    for idx, (k, v) in enumerate(stat_items):
-                        color = ""
-                        if 'PnL' in k or 'Profit' in k or 'Capital' in k:
-                            color = "green" if '+' not in str(v) and float(str(v).replace('%','').replace('₹','').replace(',','').strip()) > 0 else "red"
-                        cols[idx % 4].markdown(
-                            f'<div class="metric-card"><div class="label">{k}</div><div class="value {color}">{v}</div></div>',
-                            unsafe_allow_html=True
-                        )
-
-                    st.markdown("#### 📈 Equity Curve")
-                    eq_fig = go.Figure()
-                    eq_fig.add_trace(go.Scatter(
-                        y=equity_curve, mode='lines',
-                        line=dict(color='#58a6ff', width=2),
-                        fill='tozeroy', fillcolor='rgba(88,166,255,0.08)',
-                        name='Equity'
-                    ))
-                    eq_fig.add_hline(y=float(capital), line_dash='dash', line_color='#8b949e', opacity=0.5)
-                    eq_fig.update_layout(
-                        template='plotly_dark', paper_bgcolor='#0d1117',
-                        plot_bgcolor='#0d1117', height=280, margin=dict(l=10,r=10,t=20,b=10),
-                        showlegend=False, font=dict(color='#c9d1d9', family='monospace')
-                    )
-                    eq_fig.update_xaxes(gridcolor='#21262d')
-                    eq_fig.update_yaxes(gridcolor='#21262d')
-                    st.plotly_chart(eq_fig, use_container_width=True)
-
-                    st.markdown("#### 📋 Trade Log")
-                    if not trades_df.empty:
-                        st.dataframe(
-                            trades_df.style.map(
-                                lambda v: 'color: #3fb950' if '✅' in str(v) else ('color: #f85149' if '❌' in str(v) else ''),
-                                subset=['Result']
-                            ),
-                            use_container_width=True, height=300
-                        )
-                        csv = trades_df.to_csv(index=False)
-                        st.download_button("⬇ Download Trade Log CSV", csv, "trades.csv", "text/csv")
+                if len(df_bt) < 50:
+                    st.warning(f"⚠️ Sirf {len(df_bt)} bars mile — is period ke liye data kam hai. Bada period ya alag timeframe try karo.")
                 else:
-                    st.warning("No completed trades found. Try a different timeframe or symbol.")
+                    prices_bt = df_bt['Close'].values.flatten().astype(float)
+                    lb_bt = min(lookback, len(prices_bt)-1)
+                    nwe_bt, up_bt, lo_bt = compute_nwe_endpoint(prices_bt, bandwidth, mult, lb_bt)
+                    df_bt['nwe']   = nwe_bt
+                    df_bt['upper'] = up_bt
+                    df_bt['lower'] = lo_bt
+                    df_bt = detect_signals(df_bt)
+                    trades_df, stats, equity_curve = run_backtest(df_bt, float(capital))
+
+                    # ── Period Summary Banner ──
+                    st.markdown(f"""
+                    <div style='background:#1c2128; border:1px solid #30363d; border-radius:8px;
+                                padding:10px 18px; margin-bottom:12px; color:#8b949e; font-size:0.85rem;'>
+                        📊 <b style='color:#e6edf3'>{symbol}</b> &nbsp;|&nbsp;
+                        ⏱ <b style='color:#58a6ff'>{bt_tf}</b> &nbsp;|&nbsp;
+                        📅 <b style='color:#3fb950'>{bt_period_label}</b> &nbsp;|&nbsp;
+                        📈 <b style='color:#e6edf3'>{len(df_bt)} bars</b>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    if stats:
+                        st.markdown("#### 📊 Performance Summary")
+                        cols = st.columns(4)
+                        stat_items = list(stats.items())
+                        for idx, (k, v) in enumerate(stat_items):
+                            color = ""
+                            try:
+                                num = float(str(v).replace('%','').replace('₹','').replace(',','').strip())
+                                if ('PnL' in k or 'Profit' in k or 'Capital' in k or 'Rate' in k):
+                                    color = "green" if num > 0 else "red"
+                            except:
+                                pass
+                            cols[idx % 4].markdown(
+                                f'<div class="metric-card"><div class="label">{k}</div><div class="value {color}">{v}</div></div>',
+                                unsafe_allow_html=True
+                            )
+
+                        st.markdown("#### 📈 Equity Curve")
+                        eq_fig = go.Figure()
+                        eq_fig.add_trace(go.Scatter(
+                            y=equity_curve, mode='lines',
+                            line=dict(color='#58a6ff', width=2),
+                            fill='tozeroy', fillcolor='rgba(88,166,255,0.08)',
+                            name='Equity'
+                        ))
+                        eq_fig.add_hline(y=float(capital), line_dash='dash',
+                                         line_color='#8b949e', opacity=0.5,
+                                         annotation_text="Initial Capital",
+                                         annotation_font_color="#8b949e")
+                        # Profit zone green, loss zone red
+                        final_eq = equity_curve[-1] if equity_curve else float(capital)
+                        eq_color = '#3fb950' if final_eq >= float(capital) else '#f85149'
+                        eq_fig.update_traces(line_color=eq_color, selector=dict(name='Equity'))
+                        eq_fig.update_layout(
+                            template='plotly_dark', paper_bgcolor='#0d1117',
+                            plot_bgcolor='#0d1117', height=300,
+                            margin=dict(l=10,r=10,t=20,b=10),
+                            showlegend=False,
+                            font=dict(color='#c9d1d9', family='monospace')
+                        )
+                        eq_fig.update_xaxes(gridcolor='#21262d')
+                        eq_fig.update_yaxes(gridcolor='#21262d')
+                        st.plotly_chart(eq_fig, use_container_width=True)
+
+                        st.markdown("#### 📋 Trade Log")
+                        if not trades_df.empty:
+                            st.dataframe(
+                                trades_df.style.map(
+                                    lambda v: 'color: #3fb950' if '✅' in str(v) else ('color: #f85149' if '❌' in str(v) else ''),
+                                    subset=['Result']
+                                ),
+                                use_container_width=True, height=300
+                            )
+                            csv = trades_df.to_csv(index=False)
+                            st.download_button("⬇ Download Trade Log CSV", csv,
+                                               f"{symbol}_{bt_period_label}_trades.csv", "text/csv")
+                    else:
+                        st.warning(f"⚠️ {bt_period_label} mein koi completed trade nahi mila. Alag period ya timeframe try karo.")
 
 # ══════════════════════════════════════════════
 # TAB 3: LIVE SCANNER
@@ -690,89 +755,150 @@ with tab_backtest:
 with tab_scanner:
     st.markdown("### 🔍 Live Multi-Symbol Scanner")
 
-    # Custom symbols input inside scanner tab
-    col_sc1, col_sc2 = st.columns([3,1])
-    with col_sc1:
-        extra_symbols = st.text_input(
-            "➕ Custom Symbols add karo (comma se alag karo)",
-            value="",
-            placeholder="e.g. BAJAJFINSV.NS, ZOMATO.NS, NAUKRI.NS",
-            help="Koi bhi NSE symbol .NS ke saath likhein"
-        )
-    with col_sc2:
-        st.write("")
-        st.write("")
-        add_current = st.checkbox("✅ Selected symbol bhi scan karo", value=True)
+    # ── Source Selection ─────────────────────────
+    scan_source = st.radio(
+        "📂 Scan Kahan Se Karna Hai?",
+        ["📋 Meri Watchlist Se", "✏️ Custom Symbols", "📊 Default List"],
+        horizontal=True,
+        key="scan_source"
+    )
 
-    # Merge all symbols
-    base_symbols = [s.strip().upper() for s in scan_symbols_raw.strip().split('\n') if s.strip()]
-    if extra_symbols.strip():
-        extra_list = [s.strip().upper() for s in extra_symbols.split(',') if s.strip()]
-        base_symbols = base_symbols + extra_list
-    if add_current and symbol not in base_symbols:
-        base_symbols = [symbol] + base_symbols
-    scan_symbols = list(dict.fromkeys(base_symbols))  # remove duplicates
+    scan_symbols = []
 
-    st.caption(f"📋 Total symbols to scan: **{len(scan_symbols)}** — {', '.join(scan_symbols[:8])}{'...' if len(scan_symbols)>8 else ''}")
-
-    run_scan = st.button("🚀 Scan Now", use_container_width=False)
-    if auto_refresh:
-        st.info("Auto-refresh every 60s. Click 'Scan Now' to start, then wait.")
-
-    if run_scan or auto_refresh:
-        iv_sc, per_sc = TIMEFRAMES[scan_tf]
-        results = []
-        prog = st.progress(0)
-        status_text = st.empty()
-
-        for i, sym in enumerate(scan_symbols):
-            status_text.text(f"Scanning {sym}...")
-            df_sc = fetch_data(sym, iv_sc, per_sc)
-            if not df_sc.empty and len(df_sc) > lookback:
-                prices_sc = df_sc['Close'].values.flatten().astype(float)
-                _, up_sc, lo_sc = compute_nwe_endpoint(prices_sc, bandwidth, mult, min(lookback, len(prices_sc)-1))
-                df_sc['upper'] = up_sc
-                df_sc['lower'] = lo_sc
-                df_sc = detect_signals(df_sc)
-                last_row = df_sc.iloc[-1]
-                close_p  = float(last_row['Close'])
-                up_p     = float(last_row['upper']) if not np.isnan(last_row['upper']) else 0
-                lo_p     = float(last_row['lower']) if not np.isnan(last_row['lower']) else 0
-                sig      = last_row['signal']
-                dist_upper = round((up_p - close_p) / close_p * 100, 2) if up_p else 0
-                dist_lower = round((close_p - lo_p) / close_p * 100, 2) if lo_p else 0
-                results.append({
-                    'Symbol':       sym,
-                    'Price':        f"₹{close_p:,.2f}",
-                    'Upper Band':   f"₹{up_p:,.2f}",
-                    'Lower Band':   f"₹{lo_p:,.2f}",
-                    'Dist Upper %': f"{dist_upper}%",
-                    'Dist Lower %': f"{dist_lower}%",
-                    'Signal':       sig if sig else 'NEUTRAL',
-                    'Time':         str(df_sc.index[-1])[:16],
-                })
-            prog.progress((i + 1) / len(scan_symbols))
-
-        status_text.empty()
-        prog.empty()
-
-        if results:
-            res_df = pd.DataFrame(results)
-            # Color-code signal column
-            def highlight_signal(val):
-                if val == 'BUY':       return 'background-color:#0d2818; color:#3fb950; font-weight:bold'
-                elif val == 'SELL':    return 'background-color:#2d0f0f; color:#f85149; font-weight:bold'
-                elif val == 'SELL_CROSS_LOWER': return 'background-color:#2d1a00; color:#ffa657; font-weight:bold'
-                return 'color:#8b949e'
-
-            st.dataframe(
-                res_df.style.map(highlight_signal, subset=['Signal']),
-                use_container_width=True, height=400
-            )
-            csv_sc = res_df.to_csv(index=False)
-            st.download_button("⬇ Download Scan Results", csv_sc, "scan_results.csv", "text/csv")
+    if scan_source == "📋 Meri Watchlist Se":
+        # Watchlist init check
+        if 'watchlists' not in st.session_state or not st.session_state.watchlists:
+            st.warning("⚠️ Koi watchlist nahi hai! Pehle **Watchlist tab** mein banao.")
         else:
-            st.warning("No results. Check symbols.")
+            wl_names = list(st.session_state.watchlists.keys())
+            sel_wl_sc = st.selectbox(
+                "📂 Watchlist Choose Karo",
+                wl_names,
+                key="scanner_wl_select"
+            )
+            wl_stocks = st.session_state.watchlists.get(sel_wl_sc, [])
+            if wl_stocks:
+                st.success(f"✅ **{sel_wl_sc}** — {len(wl_stocks)} stocks: {', '.join(wl_stocks[:6])}{'...' if len(wl_stocks)>6 else ''}")
+                scan_symbols = wl_stocks.copy()
+                # Option to add current selected symbol too
+                if symbol not in scan_symbols:
+                    if st.checkbox(f"➕ '{symbol}' bhi add karo", value=False):
+                        scan_symbols = [symbol] + scan_symbols
+            else:
+                st.warning(f"'{sel_wl_sc}' watchlist mein koi stock nahi! Watchlist tab mein add karo.")
+
+    elif scan_source == "✏️ Custom Symbols":
+        st.markdown("**Symbols likhein** (comma ya newline se alag karo):")
+        custom_input = st.text_area(
+            "Custom symbols",
+            value="RELIANCE.NS, TCS.NS, INFY.NS, HDFCBANK.NS, ICICIBANK.NS",
+            height=100,
+            label_visibility="collapsed",
+            placeholder="RELIANCE.NS, TCS.NS, ^NSEI, BTC-USD"
+        )
+        raw_syms = [s.strip().upper() for s in custom_input.replace('\n', ',').split(',') if s.strip()]
+        scan_symbols = list(dict.fromkeys(raw_syms))
+        if scan_symbols:
+            st.caption(f"📋 {len(scan_symbols)} symbols: {', '.join(scan_symbols[:8])}{'...' if len(scan_symbols)>8 else ''}")
+
+    else:  # Default List
+        default_syms = [s.strip().upper() for s in scan_symbols_raw.strip().split('\n') if s.strip()]
+        if symbol not in default_syms:
+            default_syms = [symbol] + default_syms
+        scan_symbols = list(dict.fromkeys(default_syms))
+        st.caption(f"📋 Default {len(scan_symbols)} symbols")
+
+    st.divider()
+
+    # ── Scan Controls ────────────────────────────
+    sc_c1, sc_c2, sc_c3 = st.columns([2, 1, 1])
+    with sc_c1:
+        scan_tf_tab = st.selectbox("⏱ Timeframe", list(TIMEFRAMES.keys()), index=5, key='scan_tf_tab')
+    with sc_c2:
+        st.write("")
+        st.write("")
+        run_scan = st.button("🚀 Scan Now", use_container_width=True, type="primary")
+    with sc_c3:
+        st.write("")
+        st.write("")
+        st.caption(f"Total: **{len(scan_symbols)}** symbols")
+
+    if run_scan:
+        if not scan_symbols:
+            st.error("❌ Koi symbol nahi! Watchlist banao ya custom symbols likhein.")
+        else:
+            iv_sc, per_sc = TIMEFRAMES[scan_tf_tab]
+            results = []
+            prog = st.progress(0)
+            status_text = st.empty()
+
+            for i, sym in enumerate(scan_symbols):
+                status_text.text(f"⏳ Scanning {sym}... ({i+1}/{len(scan_symbols)})")
+                df_sc = fetch_data(sym, iv_sc, per_sc)
+                if not df_sc.empty and len(df_sc) > 50:
+                    prices_sc = df_sc['Close'].values.flatten().astype(float)
+                    lb_sc = min(lookback, len(prices_sc)-1)
+                    _, up_sc, lo_sc = compute_nwe_endpoint(prices_sc, bandwidth, mult, lb_sc)
+                    df_sc['upper'] = up_sc
+                    df_sc['lower'] = lo_sc
+                    df_sc = detect_signals(df_sc)
+                    last_row   = df_sc.iloc[-1]
+                    close_p    = float(last_row['Close'])
+                    up_p       = float(last_row['upper']) if not np.isnan(last_row['upper']) else 0
+                    lo_p       = float(last_row['lower']) if not np.isnan(last_row['lower']) else 0
+                    sig        = last_row['signal'] if last_row['signal'] else 'NEUTRAL'
+                    dist_upper = round((up_p - close_p) / close_p * 100, 2) if up_p else 0
+                    dist_lower = round((close_p - lo_p) / close_p * 100, 2) if lo_p else 0
+                    results.append({
+                        'Symbol':       sym,
+                        'Price':        f"₹{close_p:,.2f}",
+                        'Upper Band':   f"₹{up_p:,.2f}",
+                        'Lower Band':   f"₹{lo_p:,.2f}",
+                        'Dist Upper %': f"{dist_upper}%",
+                        'Dist Lower %': f"{dist_lower}%",
+                        'Signal':       sig,
+                        'Time':         str(df_sc.index[-1])[:16],
+                    })
+                prog.progress((i + 1) / len(scan_symbols))
+
+            status_text.empty()
+            prog.empty()
+
+            if results:
+                res_df = pd.DataFrame(results)
+
+                # Summary boxes
+                buy_count  = len(res_df[res_df['Signal']=='BUY'])
+                sell_count = len(res_df[res_df['Signal']=='SELL'])
+                neu_count  = len(res_df[res_df['Signal']=='NEUTRAL'])
+                s1, s2, s3, s4 = st.columns(4)
+                s1.markdown(f'<div class="metric-card"><div class="label">Total Scanned</div><div class="value">{len(results)}</div></div>', unsafe_allow_html=True)
+                s2.markdown(f'<div class="metric-card"><div class="label">BUY Signals</div><div class="value green">{buy_count}</div></div>', unsafe_allow_html=True)
+                s3.markdown(f'<div class="metric-card"><div class="label">SELL Signals</div><div class="value red">{sell_count}</div></div>', unsafe_allow_html=True)
+                s4.markdown(f'<div class="metric-card"><div class="label">Neutral</div><div class="value">{neu_count}</div></div>', unsafe_allow_html=True)
+                st.write("")
+
+                def highlight_signal(val):
+                    if val == 'BUY':    return 'background-color:#0d2818; color:#3fb950; font-weight:bold'
+                    elif val == 'SELL': return 'background-color:#2d0f0f; color:#f85149; font-weight:bold'
+                    return 'color:#8b949e'
+
+                st.dataframe(
+                    res_df.style.map(highlight_signal, subset=['Signal']),
+                    use_container_width=True, height=400
+                )
+
+                # Alert banners
+                buy_syms  = res_df[res_df['Signal']=='BUY']['Symbol'].tolist()
+                sell_syms = res_df[res_df['Signal']=='SELL']['Symbol'].tolist()
+                if buy_syms:
+                    st.markdown(f'<div class="alert-buy">✅ BUY: {" | ".join(buy_syms)}</div>', unsafe_allow_html=True)
+                if sell_syms:
+                    st.markdown(f'<div class="alert-sell">🔴 SELL: {" | ".join(sell_syms)}</div>', unsafe_allow_html=True)
+
+                st.download_button("⬇ Download CSV", res_df.to_csv(index=False), "scan_results.csv", "text/csv")
+            else:
+                st.warning("⚠️ Koi data nahi aaya. Symbols check karo.")
 
 # ══════════════════════════════════════════════
 # TAB 4: ALERTS
