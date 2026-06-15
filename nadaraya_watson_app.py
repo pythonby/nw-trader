@@ -28,6 +28,7 @@ import threading
 import json
 import os
 import math
+import requests
 
 # ─────────────────────────────────────────────────────────────────
 # LOAD SECRETS (Streamlit Cloud) or .env (Local)
