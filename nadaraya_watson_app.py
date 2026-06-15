@@ -723,6 +723,19 @@ with st.sidebar:
         },
     }
 
+    # Helper: get all stocks from a category
+    def get_category_stocks(category_name):
+        if category_name == "ALL CATEGORIES":
+            all_stocks = []
+            for cat, stocks in INDEX_DATABASE.items():
+                for name, ticker in stocks.items():
+                    if ticker != "CUSTOM":
+                        all_stocks.append(ticker)
+            return list(dict.fromkeys(all_stocks))
+        if category_name in INDEX_DATABASE:
+            return [v for v in INDEX_DATABASE[category_name].values() if v != "CUSTOM"]
+        return []
+
     # Flatten for dropdown
     all_categories = list(INDEX_DATABASE.keys())
     sel_category = st.selectbox(
@@ -984,77 +997,109 @@ with tab_backtest:
 with tab_scanner:
     st.markdown("### 🔍 Live Multi-Symbol Scanner")
 
-    # ── Source Selection ─────────────────────────
+    # ── Signal Filter ─────────────────────────
+    sc_filter_c1, sc_filter_c2 = st.columns([2,2])
+    with sc_filter_c1:
+        signal_filter = st.radio(
+            "🎯 Signal Filter",
+            ["ALL Signals", "✅ BUY Only (Lower Band)", "🔴 SELL Only (Upper Band)", "⚪ Neutral Only"],
+            horizontal=False, key="sc_signal_filter"
+        )
+    with sc_filter_c2:
+        band_info = st.empty()
+
+    # Show band filter info
+    if signal_filter == "✅ BUY Only (Lower Band)":
+        band_info.markdown("""
+        <div class="alert-buy">
+        ✅ Sirf wo stocks dikhenge jahan candle <b>Lower Band</b> touch/cross kare
+        </div>""", unsafe_allow_html=True)
+    elif signal_filter == "🔴 SELL Only (Upper Band)":
+        band_info.markdown("""
+        <div class="alert-sell">
+        🔴 Sirf wo stocks dikhenge jahan candle <b>Upper Band</b> touch/cross kare
+        </div>""", unsafe_allow_html=True)
+
+    st.divider()
+
+    # ── Scan Source ───────────────────────────
     scan_source = st.radio(
-        "📂 Scan Kahan Se Karna Hai?",
-        ["📋 Meri Watchlist Se", "✏️ Custom Symbols", "📊 Default List"],
-        horizontal=True,
-        key="scan_source"
+        "📂 Kahan Se Scan Karna Hai?",
+        ["📋 Meri Watchlist", "🏆 Index/Sector Category", "✏️ Custom Symbols"],
+        horizontal=True, key="scan_source2"
     )
 
     scan_symbols = []
 
-    if scan_source == "📋 Meri Watchlist Se":
-        # Watchlist init check
+    # ─── SOURCE 1: WATCHLIST ──────────────────
+    if scan_source == "📋 Meri Watchlist":
         if 'watchlists' not in st.session_state or not st.session_state.watchlists:
-            st.warning("⚠️ Koi watchlist nahi hai! Pehle **Watchlist tab** mein banao.")
+            st.warning("⚠️ Koi watchlist nahi! Pehle Watchlist tab mein banao.")
         else:
             wl_names = list(st.session_state.watchlists.keys())
-            sel_wl_sc = st.selectbox(
-                "📂 Watchlist Choose Karo",
-                wl_names,
-                key="scanner_wl_select"
-            )
+            sel_wl_sc = st.selectbox("📂 Watchlist Choose Karo", wl_names, key="scanner_wl2")
             wl_stocks = st.session_state.watchlists.get(sel_wl_sc, [])
             if wl_stocks:
-                st.success(f"✅ **{sel_wl_sc}** — {len(wl_stocks)} stocks: {', '.join(wl_stocks[:6])}{'...' if len(wl_stocks)>6 else ''}")
+                st.success(f"✅ {sel_wl_sc} — {len(wl_stocks)} stocks")
                 scan_symbols = wl_stocks.copy()
-                # Option to add current selected symbol too
-                if symbol not in scan_symbols:
-                    if st.checkbox(f"➕ '{symbol}' bhi add karo", value=False):
-                        scan_symbols = [symbol] + scan_symbols
             else:
-                st.warning(f"'{sel_wl_sc}' watchlist mein koi stock nahi! Watchlist tab mein add karo.")
+                st.warning("Watchlist mein koi stock nahi!")
 
-    elif scan_source == "✏️ Custom Symbols":
-        st.markdown("**Symbols likhein** (comma ya newline se alag karo):")
-        custom_input = st.text_area(
-            "Custom symbols",
-            value="RELIANCE.NS, TCS.NS, INFY.NS, HDFCBANK.NS, ICICIBANK.NS",
-            height=100,
-            label_visibility="collapsed",
-            placeholder="RELIANCE.NS, TCS.NS, ^NSEI, BTC-USD"
-        )
-        raw_syms = [s.strip().upper() for s in custom_input.replace('\n', ',').split(',') if s.strip()]
-        scan_symbols = list(dict.fromkeys(raw_syms))
+    # ─── SOURCE 2: INDEX/SECTOR ───────────────
+    elif scan_source == "🏆 Index/Sector Category":
+        cat_c1, cat_c2 = st.columns([1,1])
+        with cat_c1:
+            # Add "Scan All" option
+            all_cats = ["⭐ SCAN ALL CATEGORIES"] + list(INDEX_DATABASE.keys())
+            sel_scan_cat = st.selectbox("📂 Category Select Karo", all_cats, key="scan_cat")
+        with cat_c2:
+            if sel_scan_cat == "⭐ SCAN ALL CATEGORIES":
+                all_tickers = []
+                for cat, stocks in INDEX_DATABASE.items():
+                    for ticker in stocks.values():
+                        if ticker != "CUSTOM":
+                            all_tickers.append(ticker)
+                scan_symbols = list(dict.fromkeys(all_tickers))
+                st.info(f"📊 Total: {len(scan_symbols)} symbols across all categories")
+            else:
+                cat_stocks = INDEX_DATABASE.get(sel_scan_cat, {})
+                scan_symbols = [v for v in cat_stocks.values() if v != "CUSTOM"]
+                st.success(f"✅ {sel_scan_cat}: {len(scan_symbols)} symbols")
+
+        # Show symbols preview
         if scan_symbols:
-            st.caption(f"📋 {len(scan_symbols)} symbols: {', '.join(scan_symbols[:8])}{'...' if len(scan_symbols)>8 else ''}")
+            with st.expander(f"📋 Symbols preview ({len(scan_symbols)})", expanded=False):
+                preview_cols = st.columns(4)
+                for i, sym in enumerate(scan_symbols):
+                    preview_cols[i%4].caption(sym)
 
-    else:  # Default List
-        default_syms = [s.strip().upper() for s in scan_symbols_raw.strip().split('\n') if s.strip()]
-        if symbol not in default_syms:
-            default_syms = [symbol] + default_syms
-        scan_symbols = list(dict.fromkeys(default_syms))
-        st.caption(f"📋 Default {len(scan_symbols)} symbols")
+    # ─── SOURCE 3: CUSTOM ────────────────────
+    else:
+        custom_input = st.text_area(
+            "Symbols likhein (comma ya newline se alag karo)",
+            value="RELIANCE.NS, TCS.NS, INFY.NS, HDFCBANK.NS",
+            height=80, label_visibility="collapsed"
+        )
+        raw = [s.strip().upper() for s in custom_input.replace("\n",",").split(",") if s.strip()]
+        scan_symbols = list(dict.fromkeys(raw))
+        st.caption(f"📋 {len(scan_symbols)} symbols")
 
     st.divider()
 
-    # ── Scan Controls ────────────────────────────
-    sc_c1, sc_c2, sc_c3 = st.columns([2, 1, 1])
+    # ── Scan Controls ─────────────────────────
+    sc_c1, sc_c2, sc_c3 = st.columns([2,1,1])
     with sc_c1:
-        scan_tf_tab = st.selectbox("⏱ Timeframe", list(TIMEFRAMES.keys()), index=5, key='scan_tf_tab')
+        scan_tf_tab = st.selectbox("⏱ Timeframe", list(TIMEFRAMES.keys()), index=5, key="scan_tf_final")
     with sc_c2:
         st.write("")
-        st.write("")
-        run_scan = st.button("🚀 Scan Now", use_container_width=True, type="primary")
+        run_scan = st.button("🚀 Scan Now", use_container_width=True, type="primary", key="run_scan_final")
     with sc_c3:
         st.write("")
-        st.write("")
-        st.caption(f"Total: **{len(scan_symbols)}** symbols")
+        st.metric("Symbols", len(scan_symbols))
 
     if run_scan:
         if not scan_symbols:
-            st.error("❌ Koi symbol nahi! Watchlist banao ya custom symbols likhein.")
+            st.error("❌ Koi symbol nahi!")
         else:
             iv_sc, per_sc = TIMEFRAMES[scan_tf_tab]
             results = []
@@ -1065,30 +1110,37 @@ with tab_scanner:
                 status_text.text(f"⏳ Scanning {sym}... ({i+1}/{len(scan_symbols)})")
                 df_sc = fetch_data(sym, iv_sc, per_sc)
                 if not df_sc.empty and len(df_sc) > 50:
-                    prices_sc = df_sc['Close'].values.flatten().astype(float)
+                    prices_sc = df_sc["Close"].values.flatten().astype(float)
                     lb_sc = min(lookback, len(prices_sc)-1)
                     _, up_sc, lo_sc = compute_nwe_endpoint(prices_sc, bandwidth, mult, lb_sc)
-                    df_sc['upper'] = up_sc
-                    df_sc['lower'] = lo_sc
+                    df_sc["upper"] = up_sc
+                    df_sc["lower"] = lo_sc
                     df_sc = detect_signals(df_sc)
                     last_row   = df_sc.iloc[-1]
-                    close_p    = float(last_row['Close'])
-                    up_p       = float(last_row['upper']) if not np.isnan(last_row['upper']) else 0
-                    lo_p       = float(last_row['lower']) if not np.isnan(last_row['lower']) else 0
-                    sig        = last_row['signal'] if last_row['signal'] else 'NEUTRAL'
+                    close_p    = float(last_row["Close"])
+                    up_p       = float(last_row["upper"]) if not np.isnan(last_row["upper"]) else 0
+                    lo_p       = float(last_row["lower"]) if not np.isnan(last_row["lower"]) else 0
+                    sig        = last_row["signal"] if last_row["signal"] else "NEUTRAL"
                     dist_upper = round((up_p - close_p) / close_p * 100, 2) if up_p else 0
                     dist_lower = round((close_p - lo_p) / close_p * 100, 2) if lo_p else 0
+
+                    # Band touch indicators
+                    near_upper = abs(dist_upper) < 0.5
+                    near_lower = abs(dist_lower) < 0.5
+                    band_status = "🔴 Near Upper" if near_upper else ("✅ Near Lower" if near_lower else "—")
+
                     results.append({
-                        'Symbol':       sym,
-                        'Price':        f"₹{close_p:,.2f}",
-                        'Upper Band':   f"₹{up_p:,.2f}",
-                        'Lower Band':   f"₹{lo_p:,.2f}",
-                        'Dist Upper %': f"{dist_upper}%",
-                        'Dist Lower %': f"{dist_lower}%",
-                        'Signal':       sig,
-                        'Time':         str(df_sc.index[-1])[:16],
+                        "Symbol":       sym,
+                        "Price":        f"₹{close_p:,.2f}",
+                        "Upper Band":   f"₹{up_p:,.2f}",
+                        "Lower Band":   f"₹{lo_p:,.2f}",
+                        "Dist Upper%":  f"{dist_upper}%",
+                        "Dist Lower%":  f"{dist_lower}%",
+                        "Band Status":  band_status,
+                        "Signal":       sig,
+                        "Time":         str(df_sc.index[-1])[:16],
                     })
-                prog.progress((i + 1) / len(scan_symbols))
+                prog.progress((i+1)/len(scan_symbols))
 
             status_text.empty()
             prog.empty()
@@ -1096,40 +1148,64 @@ with tab_scanner:
             if results:
                 res_df = pd.DataFrame(results)
 
-                # Summary boxes
-                buy_count  = len(res_df[res_df['Signal']=='BUY'])
-                sell_count = len(res_df[res_df['Signal']=='SELL'])
-                neu_count  = len(res_df[res_df['Signal']=='NEUTRAL'])
-                s1, s2, s3, s4 = st.columns(4)
+                # ── Apply Signal Filter ───────────
+                if signal_filter == "✅ BUY Only (Lower Band)":
+                    filtered_df = res_df[res_df["Signal"] == "BUY"]
+                    st.markdown(f"#### ✅ Lower Band Touch — {len(filtered_df)} stocks found")
+                elif signal_filter == "🔴 SELL Only (Upper Band)":
+                    filtered_df = res_df[res_df["Signal"].isin(["SELL","SELL_CROSS_LOWER"])]
+                    st.markdown(f"#### 🔴 Upper Band Touch — {len(filtered_df)} stocks found")
+                elif signal_filter == "⚪ Neutral Only":
+                    filtered_df = res_df[res_df["Signal"] == "NEUTRAL"]
+                    st.markdown(f"#### ⚪ Neutral — {len(filtered_df)} stocks")
+                else:
+                    filtered_df = res_df
+                    st.markdown(f"#### 📊 All Signals — {len(filtered_df)} stocks scanned")
+
+                # ── Summary Cards ─────────────────
+                buy_c  = len(res_df[res_df["Signal"]=="BUY"])
+                sell_c = len(res_df[res_df["Signal"].isin(["SELL","SELL_CROSS_LOWER"])])
+                neu_c  = len(res_df[res_df["Signal"]=="NEUTRAL"])
+                s1,s2,s3,s4 = st.columns(4)
                 s1.markdown(f'<div class="metric-card"><div class="label">Total Scanned</div><div class="value">{len(results)}</div></div>', unsafe_allow_html=True)
-                s2.markdown(f'<div class="metric-card"><div class="label">BUY Signals</div><div class="value green">{buy_count}</div></div>', unsafe_allow_html=True)
-                s3.markdown(f'<div class="metric-card"><div class="label">SELL Signals</div><div class="value red">{sell_count}</div></div>', unsafe_allow_html=True)
-                s4.markdown(f'<div class="metric-card"><div class="label">Neutral</div><div class="value">{neu_count}</div></div>', unsafe_allow_html=True)
+                s2.markdown(f'<div class="metric-card"><div class="label">✅ BUY (Lower)</div><div class="value green">{buy_c}</div></div>', unsafe_allow_html=True)
+                s3.markdown(f'<div class="metric-card"><div class="label">🔴 SELL (Upper)</div><div class="value red">{sell_c}</div></div>', unsafe_allow_html=True)
+                s4.markdown(f'<div class="metric-card"><div class="label">⚪ Neutral</div><div class="value">{neu_c}</div></div>', unsafe_allow_html=True)
                 st.write("")
 
-                def highlight_signal(val):
-                    if val == 'BUY':    return 'background-color:#0d2818; color:#3fb950; font-weight:bold'
-                    elif val == 'SELL': return 'background-color:#2d0f0f; color:#f85149; font-weight:bold'
-                    return 'color:#8b949e'
+                if filtered_df.empty:
+                    st.info(f"⚪ Selected filter mein koi result nahi.")
+                else:
+                    def highlight_signal(val):
+                        if val == "BUY":    return "background-color:#0d2818;color:#3fb950;font-weight:bold"
+                        if val in ("SELL","SELL_CROSS_LOWER"): return "background-color:#2d0f0f;color:#f85149;font-weight:bold"
+                        return "color:#8b949e"
+                    def highlight_band(val):
+                        if "Lower" in str(val): return "color:#3fb950;font-weight:bold"
+                        if "Upper" in str(val): return "color:#f85149;font-weight:bold"
+                        return ""
 
-                st.dataframe(
-                    res_df.style.map(highlight_signal, subset=['Signal']),
-                    use_container_width=True, height=400
-                )
+                    st.dataframe(
+                        filtered_df.style
+                            .map(highlight_signal, subset=["Signal"])
+                            .map(highlight_band, subset=["Band Status"]),
+                        use_container_width=True, height=min(500, len(filtered_df)*45+50)
+                    )
 
-                # Alert banners
-                buy_syms  = res_df[res_df['Signal']=='BUY']['Symbol'].tolist()
-                sell_syms = res_df[res_df['Signal']=='SELL']['Symbol'].tolist()
-                if buy_syms:
-                    st.markdown(f'<div class="alert-buy">✅ BUY: {" | ".join(buy_syms)}</div>', unsafe_allow_html=True)
-                if sell_syms:
-                    st.markdown(f'<div class="alert-sell">🔴 SELL: {" | ".join(sell_syms)}</div>', unsafe_allow_html=True)
+                    # Alert banners
+                    buy_syms  = res_df[res_df["Signal"]=="BUY"]["Symbol"].tolist()
+                    sell_syms = res_df[res_df["Signal"].isin(["SELL","SELL_CROSS_LOWER"])]["Symbol"].tolist()
+                    if buy_syms:
+                        st.markdown(f'<div class="alert-buy">✅ LOWER BAND TOUCH: {" | ".join(buy_syms[:10])}{"..." if len(buy_syms)>10 else ""}</div>', unsafe_allow_html=True)
+                    if sell_syms:
+                        st.markdown(f'<div class="alert-sell">🔴 UPPER BAND TOUCH: {" | ".join(sell_syms[:10])}{"..." if len(sell_syms)>10 else ""}</div>', unsafe_allow_html=True)
 
-                st.download_button("⬇ Download CSV", res_df.to_csv(index=False), "scan_results.csv", "text/csv")
+                    st.download_button("⬇ Download CSV", filtered_df.to_csv(index=False),
+                                       f"scan_{scan_tf_tab}.csv", "text/csv")
             else:
-                st.warning("⚠️ Koi data nahi aaya. Symbols check karo.")
+                st.warning("⚠️ Koi data nahi aaya.")
 
-# ══════════════════════════════════════════════
+
 # TAB 4: ALERTS
 # ══════════════════════════════════════════════
 with tab_alerts:
