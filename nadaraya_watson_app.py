@@ -747,21 +747,7 @@ with st.sidebar:
         symbol = selected_val
         st.caption(f"Yahoo ticker: `{symbol}`")
 
-    valid_labels = [k for k, v in SYMBOL_LIST.items() if v is not None]
-    selected_label = st.selectbox(
-        "📌 Symbol / Index",
-        valid_labels,
-        index=0,
-        help="Nifty indices, stocks ya custom symbol choose karo"
-    )
-    selected_val = SYMBOL_LIST[selected_label]
-
-    if selected_val == "CUSTOM":
-        symbol = st.text_input("Custom Symbol likhein", value="RELIANCE.NS",
-                               help="NSE: .NS | BSE: .BO | US: AAPL | Crypto: BTC-USD").upper()
-    else:
-        symbol = selected_val
-        st.caption(f"Yahoo ticker: `{symbol}`")
+    # (symbol selection handled by INDEX_DATABASE above)
 
     st.markdown("### NW Parameters")
     bandwidth = st.slider("Bandwidth (h)", 1.0, 20.0, 8.0, 0.5,
