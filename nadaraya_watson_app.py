@@ -1349,7 +1349,7 @@ with tab_scanner:
     with sc_filter_c1:
         signal_filter = st.radio(
             "🎯 Signal Filter",
-            ["ALL Signals", "✅ BUY Only (Lower Band)", "🔴 SELL Only (Upper Band)", "⚪ Neutral Only"],
+            ["🔔 BUY + SELL Only", "✅ BUY Only (Lower Band)", "🔴 SELL Only (Upper Band)", "📊 ALL (including Neutral)"],
             horizontal=False, key="sc_signal_filter"
         )
     with sc_filter_c2:
@@ -1519,12 +1519,12 @@ with tab_scanner:
                 elif signal_filter == "🔴 SELL Only (Upper Band)":
                     filtered_df = res_df[res_df["Signal"] == "SELL"]
                     st.markdown(f"#### 🔴 Upper Band Touch — {len(filtered_df)} stocks found")
-                elif signal_filter == "⚪ Neutral Only":
-                    filtered_df = res_df[res_df["Signal"] == "NEUTRAL"]
-                    st.markdown(f"#### ⚪ Neutral — {len(filtered_df)} stocks")
-                else:
+                elif signal_filter == "📊 ALL (including Neutral)":
                     filtered_df = res_df
                     st.markdown(f"#### 📊 All Signals — {len(filtered_df)} stocks scanned")
+                else:  # Default: BUY + SELL Only
+                    filtered_df = res_df[res_df["Signal"].isin(["BUY", "SELL"])]
+                    st.markdown(f"#### 🔔 Active Signals — ✅ {len(res_df[res_df['Signal']=='BUY'])} BUY | 🔴 {len(res_df[res_df['Signal']=='SELL'])} SELL")
 
                 # ── Summary Cards ─────────────────
                 buy_c  = len(res_df[res_df["Signal"]=="BUY"])
@@ -1564,10 +1564,82 @@ with tab_scanner:
                     if sell_syms:
                         st.markdown(f'<div class="alert-sell">🔴 UPPER BAND TOUCH: {" | ".join(sell_syms[:10])}{"..." if len(sell_syms)>10 else ""}</div>', unsafe_allow_html=True)
 
-                    st.download_button("⬇ Download CSV", filtered_df.to_csv(index=False),
-                                       f"scan_{scan_tf_tab}.csv", "text/csv")
+                    # ── Save Results ─────────────────
+                    sv1, sv2, sv3 = st.columns(3)
+                    with sv1:
+                        st.download_button(
+                            "⬇ CSV Download",
+                            filtered_df.to_csv(index=False),
+                            f"scan_{scan_tf_tab}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv",
+                            "text/csv", use_container_width=True
+                        )
+                    with sv2:
+                        # Save to session history
+                        if st.button("💾 History Mein Save", use_container_width=True):
+                            if 'scan_history' not in st.session_state:
+                                st.session_state.scan_history = []
+                            save_entry = {
+                                'time':      pd.Timestamp.now().strftime('%d-%b %H:%M'),
+                                'tf':        scan_tf_tab,
+                                'total':     len(results),
+                                'buy':       len(res_df[res_df["Signal"]=="BUY"]),
+                                'sell':      len(res_df[res_df["Signal"]=="SELL"]),
+                                'buy_syms':  ",".join(res_df[res_df["Signal"]=="BUY"]["Symbol"].tolist()[:10]),
+                                'sell_syms': ",".join(res_df[res_df["Signal"]=="SELL"]["Symbol"].tolist()[:10]),
+                            }
+                            st.session_state.scan_history.insert(0, save_entry)
+                            st.success("✅ Saved!")
+                    with sv3:
+                        # Send to Telegram
+                        if st.button("📱 Telegram Bhejo", use_container_width=True):
+                            if 'tg_token' in st.session_state and st.session_state.tg_token:
+                                buy_list  = res_df[res_df["Signal"]=="BUY"]["Symbol"].tolist()
+                                sell_list = res_df[res_df["Signal"]=="SELL"]["Symbol"].tolist()
+                                tg_msg = f"📊 <b>NW Band Scanner</b>\n━━━━━━━━━━━━━\n"
+                                tg_msg += f"⏱ TF: {scan_tf_tab} | Scanned: {len(results)}\n\n"
+                                if buy_list:
+                                    tg_msg += f"✅ BUY ({len(buy_list)}):\n" + "\n".join([f"• {s}" for s in buy_list[:15]]) + "\n\n"
+                                if sell_list:
+                                    tg_msg += f"🔴 SELL ({len(sell_list)}):\n" + "\n".join([f"• {s}" for s in sell_list[:15]])
+                                if not buy_list and not sell_list:
+                                    tg_msg += "⚪ Koi signal nahi mila"
+                                try:
+                                    r = requests.post(
+                                        f"https://api.telegram.org/bot{st.session_state.tg_token}/sendMessage",
+                                        json={"chat_id": st.session_state.tg_chat_id,
+                                              "text": tg_msg, "parse_mode": "HTML"}, timeout=10)
+                                    if r.status_code == 200: st.success("📱 Telegram pe bheja!")
+                                    else: st.error("❌ Telegram error!")
+                                except: st.error("❌ Failed!")
+                            else:
+                                st.warning("Alert tab mein Telegram setup karo!")
+
             else:
                 st.warning("⚠️ Koi data nahi aaya.")
+
+
+
+# ── Scan History ─────────────────────────────────────────────────
+    if 'scan_history' in st.session_state and st.session_state.scan_history:
+        st.divider()
+        st.markdown(f"#### 📚 Scan History ({len(st.session_state.scan_history)} saved)")
+        hist_df = pd.DataFrame(st.session_state.scan_history)
+        def hl_hist(val):
+            try:
+                if int(val) > 0: return 'color:#3fb950;font-weight:bold'
+            except: pass
+            return ''
+        st.dataframe(hist_df.style.map(hl_hist, subset=['buy','sell']),
+                     use_container_width=True, height=200)
+        hc1, hc2 = st.columns([1,3])
+        with hc1:
+            if st.button("🗑 History Clear", key="clr_sc_hist"):
+                st.session_state.scan_history = []
+                st.rerun()
+        with hc2:
+            st.download_button("⬇ History CSV",
+                pd.DataFrame(st.session_state.scan_history).to_csv(index=False),
+                "scan_history.csv", "text/csv")
 
 
 # TAB 4: ALERTS
