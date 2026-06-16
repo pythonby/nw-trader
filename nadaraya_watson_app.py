@@ -1112,7 +1112,7 @@ with st.sidebar:
     st.markdown("### NW Parameters")
     bandwidth = st.slider("Bandwidth (h)", 1.0, 20.0, 8.0, 0.5,
                           help="Controls smoothing — higher = smoother")
-    mult      = st.slider("Multiplier (envelope width)", 0.5, 6.0, 3.0, 0.1)
+    mult      = st.slider("Multiplier (envelope width)", 0.5, 6.0, 3.5, 0.1)
     lookback  = st.slider("Lookback bars", 50, 499, 200, 10)
 
     st.markdown("### Timeframe")
@@ -1593,11 +1593,12 @@ with tab_alerts:
 
     tg_c1, tg_c2 = st.columns(2)
     with tg_c1:
-        tg_token_input = st.text_input("🤖 Bot Token", value=st.session_state.tg_token,
+        tg_token_input = st.text_input("🤖 Bot Token",
+            value=st.session_state.tg_token,
             placeholder="7123456789:AAGxxxxx", type="password")
     with tg_c2:
-        tg_chat_input = st.text_input("💬 Chat ID", value=st.session_state.tg_chat_id,
-            placeholder="987654321")
+        tg_chat_input = st.text_input("💬 Chat ID",
+            value=st.session_state.tg_chat_id, placeholder="987654321")
 
     btn1, btn2, _ = st.columns([1,1,2])
     with btn1:
@@ -1616,7 +1617,7 @@ with tab_alerts:
                               "parse_mode": "HTML"}, timeout=10)
                     if r.status_code == 200: st.success("✅ Telegram pe message gaya!")
                     else: st.error(f"❌ Error: {r.text}")
-                except Exception as e: st.error(f"❌ {e}")
+                except Exception as e_tg: st.error(f"❌ {e_tg}")
             else: st.warning("Pehle Token aur Chat ID save karo!")
 
     tg_ok = bool(st.session_state.tg_token and st.session_state.tg_chat_id)
@@ -1630,94 +1631,178 @@ with tab_alerts:
     st.divider()
 
     # ══════════════════════════════════════════════
-    # MULTI-TIMEFRAME ALERT SETUP
+    # ALERT SOURCE SELECTION
     # ══════════════════════════════════════════════
-    st.markdown("#### ⚙️ Multi-Timeframe Alert Setup")
-    st.markdown("Alag alag timeframe pe **alag alert conditions** set karo!")
+    st.markdown("#### 🎯 Alert Kahan Lagani Hai?")
 
-    # Alert source
-    al_src_c1, al_src_c2 = st.columns([1,1])
-    with al_src_c1:
-        alert_source = st.radio("📂 Kiske liye alert?",
-            ["✅ Selected Symbol", "📋 Meri Watchlist"], key="alert_source2")
-    with al_src_c2:
-        if alert_source == "📋 Meri Watchlist" and 'watchlists' in st.session_state and st.session_state.watchlists:
-            alert_wl = st.selectbox("Watchlist select karo",
-                list(st.session_state.watchlists.keys()), key="alert_wl2")
+    alert_mode = st.radio(
+        "Alert Mode",
+        ["📌 Particular Stock", "🏭 Sector / Category", "📋 Meri Watchlist"],
+        horizontal=True, key="alert_mode_sel"
+    )
+
+    alert_symbols = []
+
+    # ── MODE 1: PARTICULAR STOCK ─────────────────
+    if alert_mode == "📌 Particular Stock":
+        st.markdown("##### 📌 Stock Select Karo")
+        ps_c1, ps_c2 = st.columns([1,1])
+        with ps_c1:
+            ps_cat = st.selectbox("Category",
+                list(INDEX_DATABASE.keys()), key="ps_cat")
+        with ps_c2:
+            ps_syms = INDEX_DATABASE.get(ps_cat, {})
+            ps_sym_label = st.selectbox("Stock / Index",
+                [k for k,v in ps_syms.items() if v != "CUSTOM"],
+                key="ps_sym_label")
+        ps_ticker = ps_syms.get(ps_sym_label, symbol)
+        if ps_ticker == "CUSTOM":
+            ps_ticker = symbol
+
+        # Multiple stocks add karne ka option
+        st.markdown("**Ya multiple stocks add karo:**")
+        if 'alert_custom_stocks' not in st.session_state:
+            st.session_state.alert_custom_stocks = []
+
+        add_c1, add_c2 = st.columns([3,1])
+        with add_c1:
+            new_alert_stock = st.text_input("Symbol add karo",
+                placeholder="e.g. ZOMATO.NS, AAPL",
+                key="new_alert_stock", label_visibility="collapsed")
+        with add_c2:
+            if st.button("➕ Add", key="btn_add_alert_stock"):
+                sym_add = new_alert_stock.strip().upper()
+                if sym_add and sym_add not in st.session_state.alert_custom_stocks:
+                    st.session_state.alert_custom_stocks.append(sym_add)
+                    st.rerun()
+
+        # Show added stocks with remove option
+        if st.session_state.alert_custom_stocks:
+            st.markdown("**Added stocks:**")
+            for i_as, stk_as in enumerate(list(st.session_state.alert_custom_stocks)):
+                col_as1, col_as2 = st.columns([4,1])
+                with col_as1:
+                    st.markdown(f"`{stk_as}`")
+                with col_as2:
+                    if st.button("❌", key=f"rem_as_{stk_as}_{i_as}"):
+                        st.session_state.alert_custom_stocks.remove(stk_as)
+                        st.rerun()
+
+        # Final symbols list
+        alert_symbols = [ps_ticker] + st.session_state.alert_custom_stocks
+        alert_symbols = list(dict.fromkeys(alert_symbols))
+        st.success(f"✅ Alert stocks: **{', '.join(alert_symbols[:5])}**{'...' if len(alert_symbols)>5 else ''}")
+
+    # ── MODE 2: SECTOR / CATEGORY ────────────────
+    elif alert_mode == "🏭 Sector / Category":
+        st.markdown("##### 🏭 Sector Select Karo")
+        sec_c1, sec_c2 = st.columns([2,1])
+        with sec_c1:
+            all_sec_opts = ["⭐ ALL SECTORS"] + list(INDEX_DATABASE.keys())
+            sel_alert_sector = st.selectbox("Sector / Category",
+                all_sec_opts, key="alert_sector_sel")
+        with sec_c2:
+            if sel_alert_sector == "⭐ ALL SECTORS":
+                all_sec_tickers = []
+                for cat_s, stks_s in INDEX_DATABASE.items():
+                    all_sec_tickers += [v for v in stks_s.values() if v != "CUSTOM"]
+                alert_symbols = list(dict.fromkeys(all_sec_tickers))
+                st.metric("Total Stocks", len(alert_symbols))
+            else:
+                cat_data = INDEX_DATABASE.get(sel_alert_sector, {})
+                alert_symbols = [v for v in cat_data.values() if v != "CUSTOM"]
+                st.metric(sel_alert_sector, f"{len(alert_symbols)} stocks")
+
+        if alert_symbols:
+            with st.expander(f"📋 Stocks preview ({len(alert_symbols)})", expanded=False):
+                prev_cols = st.columns(4)
+                for i_p, s_p in enumerate(alert_symbols[:40]):
+                    prev_cols[i_p%4].caption(s_p)
+                if len(alert_symbols) > 40:
+                    st.caption(f"...aur {len(alert_symbols)-40} stocks")
+
+    # ── MODE 3: WATCHLIST ────────────────────────
+    else:
+        if 'watchlists' not in st.session_state or not st.session_state.watchlists:
+            st.warning("⚠️ Koi watchlist nahi! Pehle Watchlist tab mein banao.")
         else:
-            alert_wl = None
+            alert_wl_sel = st.selectbox("Watchlist",
+                list(st.session_state.watchlists.keys()), key="alert_wl_sel3")
+            alert_symbols = st.session_state.watchlists.get(alert_wl_sel, [])
+            st.success(f"✅ {alert_wl_sel}: {len(alert_symbols)} stocks")
 
-    st.markdown("---")
+    st.divider()
 
-    # ── Multi-TF Alert Rules ─────────────────────
-    st.markdown("**📋 Timeframe-wise Alert Rules:**")
-    st.caption("Har timeframe ke liye alag BUY/SELL alert set kar sakte ho")
+    # ══════════════════════════════════════════════
+    # MULTI-TIMEFRAME ALERT RULES
+    # ══════════════════════════════════════════════
+    st.markdown("#### ⚙️ Timeframe-wise Alert Rules")
+    st.caption("Har timeframe ke liye alag BUY/SELL alert set karo — sab ek saath check honge")
 
-    # Init alert rules
     if 'alert_rules' not in st.session_state:
         st.session_state.alert_rules = [
             {"tf": "5m",  "buy": True,  "sell": True,  "active": True},
             {"tf": "15m", "buy": True,  "sell": True,  "active": True},
             {"tf": "1H",  "buy": True,  "sell": True,  "active": True},
-            {"tf": "4H",  "buy": False, "sell": False, "active": False},
-            {"tf": "1D",  "buy": False, "sell": False, "active": False},
+            {"tf": "4H",  "buy": False, "sell": False,  "active": False},
+            {"tf": "1D",  "buy": False, "sell": False,  "active": False},
         ]
 
-    # Show rules table
-    header_cols = st.columns([1.5, 1, 1, 1])
-    header_cols[0].markdown("**⏱ Timeframe**")
-    header_cols[1].markdown("**✅ BUY Alert**")
-    header_cols[2].markdown("**🔴 SELL Alert**")
-    header_cols[3].markdown("**🔘 Active**")
+    h1,h2,h3,h4 = st.columns([1.5,1,1,1])
+    h1.markdown("**⏱ Timeframe**")
+    h2.markdown("**✅ BUY (Lower)**")
+    h3.markdown("**🔴 SELL (Upper)**")
+    h4.markdown("**🔘 Active**")
 
     updated_rules = []
-    for i, rule in enumerate(st.session_state.alert_rules):
-        rc = st.columns([1.5, 1, 1, 1])
+    for i_r, rule in enumerate(st.session_state.alert_rules):
+        rc = st.columns([1.5,1,1,1])
         with rc[0]:
-            tf_sel = st.selectbox("", list(TIMEFRAMES.keys()),
+            tf_s = st.selectbox("", list(TIMEFRAMES.keys()),
                 index=list(TIMEFRAMES.keys()).index(rule["tf"]) if rule["tf"] in TIMEFRAMES else 0,
-                key=f"rule_tf_{i}", label_visibility="collapsed")
+                key=f"rtf_{i_r}", label_visibility="collapsed")
         with rc[1]:
-            buy_en = st.checkbox("BUY", value=rule["buy"], key=f"rule_buy_{i}", label_visibility="collapsed")
+            buy_s = st.checkbox("BUY", value=rule["buy"],
+                key=f"rbuy_{i_r}", label_visibility="collapsed")
         with rc[2]:
-            sell_en = st.checkbox("SELL", value=rule["sell"], key=f"rule_sell_{i}", label_visibility="collapsed")
+            sell_s = st.checkbox("SELL", value=rule["sell"],
+                key=f"rsell_{i_r}", label_visibility="collapsed")
         with rc[3]:
-            active_en = st.checkbox("ON", value=rule["active"], key=f"rule_active_{i}", label_visibility="collapsed")
-        updated_rules.append({"tf": tf_sel, "buy": buy_en, "sell": sell_en, "active": active_en})
-
+            act_s = st.checkbox("ON", value=rule["active"],
+                key=f"ract_{i_r}", label_visibility="collapsed")
+        updated_rules.append({"tf": tf_s, "buy": buy_s, "sell": sell_s, "active": act_s})
     st.session_state.alert_rules = updated_rules
 
-    # Add/Remove rule buttons
-    add_c1, add_c2, _ = st.columns([1,1,2])
-    with add_c1:
-        if st.button("➕ Row Add Karo") and len(st.session_state.alert_rules) < 8:
-            st.session_state.alert_rules.append({"tf": "1D", "buy": True, "sell": True, "active": True})
+    ra1, ra2, _ = st.columns([1,1,2])
+    with ra1:
+        if st.button("➕ Row Add") and len(st.session_state.alert_rules) < 8:
+            st.session_state.alert_rules.append({"tf":"1D","buy":True,"sell":True,"active":True})
             st.rerun()
-    with add_c2:
+    with ra2:
         if st.button("➖ Row Hatao") and len(st.session_state.alert_rules) > 1:
             st.session_state.alert_rules.pop()
             st.rerun()
 
-    # Active rules summary
     active_rules = [r for r in st.session_state.alert_rules if r["active"]]
     if active_rules:
-        summary = " | ".join([f"{'✅' if r['buy'] else ''}{'🔴' if r['sell'] else ''} {r['tf']}" for r in active_rules])
-        st.caption(f"Active rules: {summary}")
+        summary = " | ".join([
+            f"{'✅' if r['buy'] else ''}{'🔴' if r['sell'] else ''} {r['tf']}"
+            for r in active_rules])
+        st.caption(f"Active: {summary}")
 
     st.divider()
 
     # ── Run Alert Check ──────────────────────────
-    check_col1, check_col2 = st.columns([2,1])
-    with check_col1:
-        st.markdown("**🚀 Alert Check Karo**")
-        st.caption("Sab active timeframes ek saath check honge")
-    with check_col2:
+    al_run_c1, al_run_c2 = st.columns([3,1])
+    with al_run_c1:
+        st.markdown(f"**Checking:** {len(alert_symbols)} stocks × {len(active_rules)} timeframes = **{len(alert_symbols)*len(active_rules)} checks**")
+    with al_run_c2:
         check_alerts = st.button("🔍 Check Now", use_container_width=True, type="primary")
 
     if 'alert_log' not in st.session_state:
         st.session_state.alert_log = []
 
-    def send_telegram_msg(token, chat_id, text):
+    def send_tg(token, chat_id, text):
         try:
             r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
                 json={"chat_id": chat_id, "text": text, "parse_mode": "HTML"}, timeout=10)
@@ -1725,29 +1810,24 @@ with tab_alerts:
         except: return False
 
     if check_alerts:
-        active_rules = [r for r in st.session_state.alert_rules if r["active"]]
-        if not active_rules:
-            st.warning("⚠️ Koi active rule nahi! Upar timeframe rules mein 'ON' karo.")
+        if not alert_symbols:
+            st.error("❌ Koi symbol nahi! Upar stock/sector/watchlist select karo.")
+        elif not active_rules:
+            st.warning("⚠️ Koi active rule nahi! Timeframe rules mein ON karo.")
         else:
-            # Determine symbols
-            if alert_source == "📋 Meri Watchlist" and alert_wl and 'watchlists' in st.session_state:
-                check_syms = st.session_state.watchlists.get(alert_wl, [symbol])
-            else:
-                check_syms = [symbol]
-
             all_alerts = []
-            total_checks = len(active_rules) * len(check_syms)
+            total = len(active_rules) * len(alert_symbols)
             prog = st.progress(0)
             status = st.empty()
             count = 0
 
             for rule in active_rules:
-                tf_rule = rule["tf"]
-                iv_rule, per_rule = TIMEFRAMES[tf_rule]
+                tf_r = rule["tf"]
+                iv_r, per_r = TIMEFRAMES[tf_r]
 
-                for sym_al in check_syms:
-                    status.text(f"⏳ Checking {sym_al} on {tf_rule}...")
-                    df_al = fetch_data(sym_al, iv_rule, per_rule)
+                for sym_al in alert_symbols:
+                    status.text(f"⏳ {sym_al} | {tf_r} ({count+1}/{total})")
+                    df_al = fetch_data(sym_al, iv_r, per_r)
 
                     if not df_al.empty and len(df_al) > 50:
                         prices_al = df_al['Close'].values.flatten().astype(float)
@@ -1755,28 +1835,35 @@ with tab_alerts:
                         _, up_al, lo_al = compute_nwe_endpoint(prices_al, bandwidth, mult, lb_al)
                         df_al['upper'] = up_al
                         df_al['lower'] = lo_al
-                        df_al = detect_signals(df_al)
 
-                        last_al = df_al.iloc[-1]
-                        price_al = round(float(last_al['Close']), 2)
-                        sig_al   = last_al['signal']
-                        ts_al    = str(df_al.index[-1])[:16]
+                        last_al   = df_al.iloc[-1]
+                        price_al  = round(float(last_al['Close']), 2)
+                        up_v_al   = float(last_al['upper']) if not np.isnan(last_al['upper']) else 0
+                        lo_v_al   = float(last_al['lower']) if not np.isnan(last_al['lower']) else 0
+                        ts_al     = str(df_al.index[-1])[:16]
 
-                        if sig_al == 'BUY' and rule["buy"]:
-                            all_alerts.append({
-                                'type': 'BUY', 'symbol': sym_al,
-                                'price': price_al, 'time': ts_al, 'tf': tf_rule,
-                                'msg': f"📈 <b>NW Band Scanner</b>\n━━━━━━━━━━━━━\n✅ <b>BUY SIGNAL</b>\n📌 {sym_al}\n⏱ Timeframe: {tf_rule}\n💰 ₹{price_al:,}\n🕐 {ts_al}\n📊 Lower Band Touch\n━━━━━━━━━━━━━"
-                            })
-                        elif sig_al in ('SELL','SELL_CROSS_LOWER') and rule["sell"]:
+                        dist_up_al = round((up_v_al - price_al) / price_al * 100, 2) if up_v_al else 999
+                        dist_lo_al = round((price_al - lo_v_al) / price_al * 100, 2) if lo_v_al else 999
+
+                        near_upper_al = dist_up_al <= 0.5 or price_al >= up_v_al
+                        near_lower_al = dist_lo_al <= 0.5 or price_al <= lo_v_al
+
+                        if near_upper_al and rule["sell"]:
                             all_alerts.append({
                                 'type': 'SELL', 'symbol': sym_al,
-                                'price': price_al, 'time': ts_al, 'tf': tf_rule,
-                                'msg': f"📉 <b>NW Band Scanner</b>\n━━━━━━━━━━━━━\n🔴 <b>SELL SIGNAL</b>\n📌 {sym_al}\n⏱ Timeframe: {tf_rule}\n💰 ₹{price_al:,}\n🕐 {ts_al}\n📊 Upper Band Touch\n━━━━━━━━━━━━━"
+                                'price': price_al, 'time': ts_al, 'tf': tf_r,
+                                'dist': f"{dist_up_al}% from upper",
+                                'msg': f"📉 <b>NW Band Scanner</b>\n━━━━━━━━━━━━━\n🔴 <b>SELL SIGNAL</b>\n📌 {sym_al}\n⏱ TF: {tf_r}\n💰 ₹{price_al:,}\n📊 Upper Band Touch ({dist_up_al}%)\n🕐 {ts_al}\n━━━━━━━━━━━━━"
                             })
-
+                        elif near_lower_al and rule["buy"]:
+                            all_alerts.append({
+                                'type': 'BUY', 'symbol': sym_al,
+                                'price': price_al, 'time': ts_al, 'tf': tf_r,
+                                'dist': f"{dist_lo_al}% from lower",
+                                'msg': f"📈 <b>NW Band Scanner</b>\n━━━━━━━━━━━━━\n✅ <b>BUY SIGNAL</b>\n📌 {sym_al}\n⏱ TF: {tf_r}\n💰 ₹{price_al:,}\n📊 Lower Band Touch ({dist_lo_al}%)\n🕐 {ts_al}\n━━━━━━━━━━━━━"
+                            })
                     count += 1
-                    prog.progress(count / total_checks)
+                    prog.progress(count/total)
 
             status.empty()
             prog.empty()
@@ -1786,29 +1873,33 @@ with tab_alerts:
                 for al in all_alerts:
                     if al['type'] == 'BUY':
                         st.markdown(
-                            f'<div class="alert-buy">✅ <b>BUY</b> — {al["symbol"]} | ⏱ {al["tf"]} | 💰 ₹{al["price"]:,} | 🕐 {al["time"]}</div>',
+                            f'<div class="alert-buy">✅ <b>BUY</b> — {al["symbol"]} | ⏱ {al["tf"]} | 💰 ₹{al["price"]:,} | 📊 {al["dist"]} | 🕐 {al["time"]}</div>',
                             unsafe_allow_html=True)
                     else:
                         st.markdown(
-                            f'<div class="alert-sell">🔴 <b>SELL</b> — {al["symbol"]} | ⏱ {al["tf"]} | 💰 ₹{al["price"]:,} | 🕐 {al["time"]}</div>',
+                            f'<div class="alert-sell">🔴 <b>SELL</b> — {al["symbol"]} | ⏱ {al["tf"]} | 💰 ₹{al["price"]:,} | 📊 {al["dist"]} | 🕐 {al["time"]}</div>',
                             unsafe_allow_html=True)
                     if tg_ok:
-                        ok = send_telegram_msg(st.session_state.tg_token, st.session_state.tg_chat_id, al['msg'])
-                        if ok: st.caption(f"  📱 Telegram sent: {al['symbol']} {al['tf']}")
+                        ok = send_tg(st.session_state.tg_token, st.session_state.tg_chat_id, al['msg'])
+                        if ok: st.caption(f"  📱 Sent: {al['symbol']} {al['tf']}")
                     st.session_state.alert_log.append(al)
             else:
-                st.info(f"⚪ {len(check_syms)} symbols × {len(active_rules)} timeframes checked — Koi signal nahi.")
+                st.info(f"⚪ {len(alert_symbols)} stocks × {len(active_rules)} TF checked — Koi signal nahi mila.")
                 if tg_ok:
-                    send_telegram_msg(st.session_state.tg_token, st.session_state.tg_chat_id,
-                        f"📊 <b>NW Band Scanner</b>\n⚪ Scan Complete\nSymbols: {', '.join(check_syms[:5])}\nKoi signal nahi mila.")
+                    send_tg(st.session_state.tg_token, st.session_state.tg_chat_id,
+                        f"📊 <b>NW Band Scanner</b>\n⚪ Scan Complete\n{len(alert_symbols)} stocks checked\nKoi signal nahi mila.")
 
     # ── Alert Log ────────────────────────────────
     if st.session_state.alert_log:
         st.divider()
         st.markdown(f"#### 📋 Alert History ({len(st.session_state.alert_log)})")
         log_df = pd.DataFrame([{
-            'Time': a['time'], 'Type': a['type'],
-            'Symbol': a['symbol'], 'TF': a.get('tf',''), 'Price': f"₹{a['price']:,}"
+            'Time':   a['time'],
+            'Type':   a['type'],
+            'Symbol': a['symbol'],
+            'TF':     a.get('tf',''),
+            'Price':  f"₹{a['price']:,}",
+            'Band':   a.get('dist',''),
         } for a in st.session_state.alert_log[::-1]])
 
         def hl_log(val):
@@ -1817,9 +1908,11 @@ with tab_alerts:
             return ''
         st.dataframe(log_df.style.map(hl_log, subset=['Type']),
                      use_container_width=True, height=250)
-        if st.button("🗑 Clear History"):
-            st.session_state.alert_log = []
-            st.rerun()
+        c_cl1, _ = st.columns([1,3])
+        with c_cl1:
+            if st.button("🗑 Clear History"):
+                st.session_state.alert_log = []
+                st.rerun()
 
 
 # TAB 5: WATCHLIST MANAGER
