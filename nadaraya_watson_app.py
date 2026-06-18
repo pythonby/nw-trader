@@ -333,7 +333,8 @@ def run_backtest(df: pd.DataFrame, initial_capital: float = 100000.0):
 
 
 def run_backtest_signal_only(df: pd.DataFrame, signal_type: str, holding_bars: int = 10,
-                              sl_target_mode: str = "none", sl_pct: float = 1.0, tgt_pct: float = 2.0):
+                              sl_target_mode: str = "none", sl_pct: float = 1.0, tgt_pct: float = 2.0,
+                              initial_capital: float = 100000.0):
     """
     Pure signal backtest with proper SL/Target — analyzes EVERY occurrence of a
     signal independently using real risk management rules.
@@ -431,6 +432,7 @@ def run_backtest_signal_only(df: pd.DataFrame, signal_type: str, holding_bars: i
                 'Exit Time':    exit_time,
                 'Exit Reason':  exit_reason,
                 'PnL %':        round(pnl_pct, 2),
+                'PnL ₹':        round(initial_capital * pnl_pct / 100, 2),
                 'Best Move %':  round(best_pct, 2),
                 'Result':       '✅ Win' if pnl_pct > 0 else '❌ Loss'
             }
@@ -443,6 +445,13 @@ def run_backtest_signal_only(df: pd.DataFrame, signal_type: str, holding_bars: i
     stats = {}
     if not trades_df.empty:
         wins = trades_df[trades_df['PnL %'] > 0]
+
+        # ── Compounded capital simulation (each signal trades full capital) ──
+        running_capital = initial_capital
+        for pnl_p in trades_df['PnL %']:
+            running_capital += running_capital * (pnl_p / 100)
+        net_profit = running_capital - initial_capital
+
         stats = {
             'Total Signals':   len(trades_df),
             'Win Rate':        f"{round(len(wins)/len(trades_df)*100,1)}%",
@@ -451,6 +460,8 @@ def run_backtest_signal_only(df: pd.DataFrame, signal_type: str, holding_bars: i
             'Best Signal':     f"{trades_df['PnL %'].max()}%",
             'Worst Signal':    f"{trades_df['PnL %'].min()}%",
             'Total Return %':  f"{round(trades_df['PnL %'].sum(),2)}%",
+            'Final Capital':   f"₹{round(running_capital,2):,}",
+            'Net Profit':      f"₹{round(net_profit,2):,}",
         }
         if sl_target_mode in ("percent", "band") and 'Exit Reason' in trades_df.columns:
             sl_hits  = len(trades_df[trades_df['Exit Reason']=='🛑 SL Hit'])
@@ -1545,7 +1556,8 @@ with tab_backtest:
                         trades_df, stats = run_backtest_signal_only(
                             df_bt, sig_type, holding_bars,
                             sl_target_mode=sl_target_mode,
-                            sl_pct=sl_pct_input, tgt_pct=tgt_pct_input
+                            sl_pct=sl_pct_input, tgt_pct=tgt_pct_input,
+                            initial_capital=float(capital)
                         )
 
                         if stats:
@@ -1555,8 +1567,8 @@ with tab_backtest:
                             for idx, (k, v) in enumerate(stats.items()):
                                 color = ""
                                 try:
-                                    num = float(str(v).replace('%','').strip())
-                                    if 'PnL' in k or 'Return' in k or 'Move' in k or 'Rate' in k:
+                                    num = float(str(v).replace('%','').replace('₹','').replace(',','').strip())
+                                    if 'PnL' in k or 'Return' in k or 'Move' in k or 'Profit' in k or 'Capital' in k:
                                         color = "green" if num > 0 else "red"
                                 except: pass
                                 cols[idx % 4].markdown(
