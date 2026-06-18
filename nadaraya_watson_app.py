@@ -249,32 +249,42 @@ def compute_indicator(prices: np.ndarray, indicator: str, bandwidth: float, mult
 def detect_signals(df: pd.DataFrame):
     """
     Returns DataFrame with signal column:
-      'BUY'  — price crosses UNDER lower band (bounce up expected)
-      'SELL' — price crosses OVER  upper band (reversal down expected)
+      'BUY'  — price touches/crosses lower band (mean-reversion buy zone)
+      'SELL' — price touches/crosses upper band (mean-reversion sell zone)
+
+    Logic (clean, non-overlapping):
+      - If close <= lower band  -> BUY  (price is at/below lower band)
+      - If close >= upper band  -> SELL (price is at/above upper band)
+      - Only fires on the bar where this FIRST becomes true (transition),
+        not on every bar while price stays beyond the band.
     """
     signals = []
     close  = df['Close'].values
     upper  = df['upper'].values
     lower  = df['lower'].values
 
-    for i in range(1, len(df)):
+    n = len(df)
+    for i in range(n):
         sig = ''
-        # Touch/cross lower → BUY alert
-        if close[i] <= lower[i] and close[i - 1] > lower[i - 1]:
-            sig = 'SELL_CROSS_LOWER'   # crossunder lower = bearish breakout
-        elif close[i] < lower[i] and close[i - 1] >= lower[i - 1]:
-            sig = 'SELL_CROSS_LOWER'
-        # bounce back above lower from below → BUY
-        if close[i] > lower[i] and close[i - 1] <= lower[i - 1]:
+        if i == 0 or np.isnan(upper[i]) or np.isnan(lower[i]):
+            signals.append(sig)
+            continue
+
+        was_below_lower = close[i-1] <= lower[i-1] if not np.isnan(lower[i-1]) else False
+        was_above_upper = close[i-1] >= upper[i-1] if not np.isnan(upper[i-1]) else False
+
+        now_below_lower = close[i] <= lower[i]
+        now_above_upper = close[i] >= upper[i]
+
+        # Fire BUY only on the transition INTO the lower-band zone
+        if now_below_lower and not was_below_lower:
             sig = 'BUY'
-        # Touch/cross upper → SELL alert
-        if close[i] >= upper[i] and close[i - 1] < upper[i - 1]:
+        # Fire SELL only on the transition INTO the upper-band zone
+        elif now_above_upper and not was_above_upper:
             sig = 'SELL'
-        elif close[i] > upper[i] and close[i - 1] <= upper[i - 1]:
-            sig = 'SELL'
+
         signals.append(sig)
 
-    signals.insert(0, '')
     df = df.copy()
     df['signal'] = signals
     return df
@@ -1296,22 +1306,28 @@ with st.sidebar:
         "Indicator Type",
         ["NW Envelope (Nadaraya-Watson)", "Bollinger Bands"],
         index=0,
-        help="Dono indicators Chart, Backtest, Live Scanner, aur Alerts mein use honge"
+        help="Dono indicators Chart, Backtest, Live Scanner, aur Alerts mein use honge",
+        key="indicator_type_select"
     )
 
     if indicator_choice == "Bollinger Bands":
         st.markdown("### Bollinger Parameters")
         bandwidth = 8.0  # unused for BB, kept for compatibility
         mult      = st.slider("Std Dev Multiplier", 0.5, 4.0, 2.0, 0.1,
-                              help="Bollinger Bands standard — 2.0 is classic")
+                              help="Bollinger Bands standard — 2.0 is classic",
+                              key="bb_mult_slider")
         lookback  = st.slider("BB Period (length)", 5, 100, 20, 1,
-                              help="Bollinger Bands standard — 20 is classic")
+                              help="Bollinger Bands standard — 20 is classic",
+                              key="bb_length_slider")
     else:
         st.markdown("### NW Parameters")
         bandwidth = st.slider("Bandwidth (h)", 1.0, 20.0, 8.0, 0.5,
-                              help="Controls smoothing — higher = smoother")
-        mult      = st.slider("Multiplier (envelope width)", 0.5, 6.0, 3.5, 0.1)
-        lookback  = st.slider("Lookback bars", 50, 499, 200, 10)
+                              help="Controls smoothing — higher = smoother",
+                              key="nw_bandwidth_slider")
+        mult      = st.slider("Multiplier (envelope width)", 0.5, 6.0, 3.5, 0.1,
+                              key="nw_mult_slider")
+        lookback  = st.slider("Lookback bars", 50, 499, 200, 10,
+                              key="nw_lookback_slider")
 
     st.markdown("### Timeframe")
     tf_selected = st.selectbox("Timeframe", list(TIMEFRAMES.keys()), index=6)
