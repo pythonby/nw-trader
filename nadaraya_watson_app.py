@@ -202,6 +202,46 @@ def compute_nwe_endpoint(prices: np.ndarray, h: float = 8.0, mult: float = 3.0, 
     lower = nwe_vals - mae_arr
     return nwe_vals, upper, lower
 
+
+def compute_bollinger_bands(prices: np.ndarray, length: int = 20, mult: float = 2.0):
+    """
+    Bollinger Bands — classic mean + std-dev envelope.
+    Returns: middle (SMA), upper, lower — same shape as compute_nwe_endpoint output
+    so it can be used as a drop-in replacement.
+    """
+    n = len(prices)
+    lb = min(length, n)
+
+    middle = np.full(n, np.nan)
+    upper  = np.full(n, np.nan)
+    lower  = np.full(n, np.nan)
+
+    s = pd.Series(prices)
+    sma = s.rolling(window=lb, min_periods=lb).mean().values
+    std = s.rolling(window=lb, min_periods=lb).std(ddof=0).values
+
+    middle = sma
+    upper  = sma + mult * std
+    lower  = sma - mult * std
+
+    return middle, upper, lower
+
+# ─────────────────────────────────────────────────────────────────
+# INDICATOR DISPATCHER — switch between NW Envelope and Bollinger
+# ─────────────────────────────────────────────────────────────────
+
+def compute_indicator(prices: np.ndarray, indicator: str, bandwidth: float, mult: float, lookback: int):
+    """
+    Unified entry point used by Chart, Backtest, Live Scanner, and Alerts.
+    indicator: "NW Envelope" or "Bollinger Bands"
+    For NW: bandwidth = h, lookback = NW lookback bars
+    For BB: bandwidth ignored, lookback = BB period length
+    """
+    if indicator == "Bollinger Bands":
+        return compute_bollinger_bands(prices, length=lookback, mult=mult)
+    else:
+        return compute_nwe_endpoint(prices, h=bandwidth, mult=mult, lookback=lookback)
+
 # ─────────────────────────────────────────────────────────────────
 # SIGNAL DETECTION
 # ─────────────────────────────────────────────────────────────────
@@ -476,7 +516,7 @@ def run_backtest_signal_only(df: pd.DataFrame, signal_type: str, holding_bars: i
 # CHART BUILDER
 # ─────────────────────────────────────────────────────────────────
 
-def build_chart(df: pd.DataFrame, symbol: str, tf: str) -> go.Figure:
+def build_chart(df: pd.DataFrame, symbol: str, tf: str, indicator_name: str = "NW Envelope (Nadaraya-Watson)") -> go.Figure:
     fig = make_subplots(
         rows=2, cols=1,
         shared_xaxes=True,
@@ -528,12 +568,13 @@ def build_chart(df: pd.DataFrame, symbol: str, tf: str) -> go.Figure:
             opacity=1.0
         ), row=1, col=1)
 
-    # NWE midline (dashed blue like TradingView)
+    # Midline — NW Estimate or Bollinger Middle (SMA), dashed
     if 'nwe' in df.columns:
+        mid_label = "Middle (SMA)" if indicator_name == "Bollinger Bands" else "NW Estimate"
         fig.add_trace(go.Scatter(
             x=df.index, y=df['nwe'],
             line=dict(color='#74c0fc', width=1.5, dash='dash'),
-            name='NW Estimate',
+            name=mid_label,
             opacity=0.85
         ), row=1, col=1)
 
@@ -1250,11 +1291,27 @@ with st.sidebar:
 
     # (symbol selection handled by INDEX_DATABASE above)
 
-    st.markdown("### NW Parameters")
-    bandwidth = st.slider("Bandwidth (h)", 1.0, 20.0, 8.0, 0.5,
-                          help="Controls smoothing — higher = smoother")
-    mult      = st.slider("Multiplier (envelope width)", 0.5, 6.0, 3.5, 0.1)
-    lookback  = st.slider("Lookback bars", 50, 499, 200, 10)
+    st.markdown("### 📐 Indicator")
+    indicator_choice = st.selectbox(
+        "Indicator Type",
+        ["NW Envelope (Nadaraya-Watson)", "Bollinger Bands"],
+        index=0,
+        help="Dono indicators Chart, Backtest, Live Scanner, aur Alerts mein use honge"
+    )
+
+    if indicator_choice == "Bollinger Bands":
+        st.markdown("### Bollinger Parameters")
+        bandwidth = 8.0  # unused for BB, kept for compatibility
+        mult      = st.slider("Std Dev Multiplier", 0.5, 4.0, 2.0, 0.1,
+                              help="Bollinger Bands standard — 2.0 is classic")
+        lookback  = st.slider("BB Period (length)", 5, 100, 20, 1,
+                              help="Bollinger Bands standard — 20 is classic")
+    else:
+        st.markdown("### NW Parameters")
+        bandwidth = st.slider("Bandwidth (h)", 1.0, 20.0, 8.0, 0.5,
+                              help="Controls smoothing — higher = smoother")
+        mult      = st.slider("Multiplier (envelope width)", 0.5, 6.0, 3.5, 0.1)
+        lookback  = st.slider("Lookback bars", 50, 499, 200, 10)
 
     st.markdown("### Timeframe")
     tf_selected = st.selectbox("Timeframe", list(TIMEFRAMES.keys()), index=6)
@@ -1284,8 +1341,8 @@ with st.sidebar:
 st.markdown(f"""
 <div class="app-header">
   <div>
-    <h1>📈 Nadaraya-Watson Envelope</h1>
-    <p>LuxAlgo strategy | h={bandwidth} | mult={mult} | {tf_selected} | {symbol}</p>
+    <h1>📈 {indicator_choice}</h1>
+    <p>{'h='+str(bandwidth)+' | ' if indicator_choice != 'Bollinger Bands' else 'Period='+str(lookback)+' | '}mult={mult} | {tf_selected} | {symbol}</p>
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -1319,13 +1376,13 @@ with tab_chart:
         st.error("❌ No data. Check symbol or try again.")
     else:
         prices = df['Close'].values.flatten().astype(float)
-        nwe_vals, upper_vals, lower_vals = compute_nwe_endpoint(prices, bandwidth, mult, lookback)
+        nwe_vals, upper_vals, lower_vals = compute_indicator(prices, indicator_choice, bandwidth, mult, lookback)
         df['nwe']   = nwe_vals
         df['upper'] = upper_vals
         df['lower'] = lower_vals
         df = detect_signals(df)
 
-        fig = build_chart(df, symbol, tf_chart)
+        fig = build_chart(df, symbol, tf_chart, indicator_name=indicator_choice)
         st.plotly_chart(fig, use_container_width=True)
 
         # Last bar info
@@ -1477,7 +1534,7 @@ with tab_backtest:
                 else:
                     prices_bt = df_bt['Close'].values.flatten().astype(float)
                     lb_bt = min(lookback, len(prices_bt)-1)
-                    nwe_bt, up_bt, lo_bt = compute_nwe_endpoint(prices_bt, bandwidth, mult, lb_bt)
+                    nwe_bt, up_bt, lo_bt = compute_indicator(prices_bt, indicator_choice, bandwidth, mult, lb_bt)
                     df_bt['nwe']   = nwe_bt
                     df_bt['upper'] = up_bt
                     df_bt['lower'] = lo_bt
@@ -1751,7 +1808,7 @@ with tab_scanner:
                 if not df_sc.empty and len(df_sc) > 50:
                     prices_sc = df_sc["Close"].values.flatten().astype(float)
                     lb_sc = min(lookback, len(prices_sc)-1)
-                    _, up_sc, lo_sc = compute_nwe_endpoint(prices_sc, bandwidth, mult, lb_sc)
+                    _, up_sc, lo_sc = compute_indicator(prices_sc, indicator_choice, bandwidth, mult, lb_sc)
                     df_sc["upper"] = up_sc
                     df_sc["lower"] = lo_sc
                     df_sc = detect_signals(df_sc)
@@ -2281,7 +2338,7 @@ with tab_alerts:
                     if not df_al.empty and len(df_al) > 50:
                         prices_al = df_al['Close'].values.flatten().astype(float)
                         lb_al = min(lookback, len(prices_al)-1)
-                        _, up_al, lo_al = compute_nwe_endpoint(prices_al, bandwidth, mult, lb_al)
+                        _, up_al, lo_al = compute_indicator(prices_al, indicator_choice, bandwidth, mult, lb_al)
                         df_al['upper'] = up_al
                         df_al['lower'] = lo_al
 
@@ -2563,7 +2620,7 @@ with tab_watchlist:
                         if not df_wl.empty and len(df_wl) > 50:
                             prices_wl = df_wl['Close'].values.flatten().astype(float)
                             lb_wl = min(lookback, len(prices_wl)-1)
-                            _, up_wl, lo_wl = compute_nwe_endpoint(prices_wl, bandwidth, mult, lb_wl)
+                            _, up_wl, lo_wl = compute_indicator(prices_wl, indicator_choice, bandwidth, mult, lb_wl)
                             df_wl['upper'] = up_wl
                             df_wl['lower'] = lo_wl
                             df_wl = detect_signals(df_wl)
