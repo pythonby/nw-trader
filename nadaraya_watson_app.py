@@ -1367,8 +1367,8 @@ st.markdown(f"""
 # TABS
 # ─────────────────────────────────────────────────────────────────
 
-tab_chart, tab_backtest, tab_scanner, tab_alerts, tab_watchlist, tab_help = st.tabs([
-    "📊 Chart", "🧪 Backtest", "🔍 Live Scanner", "🔔 Alerts", "📋 Watchlist", "📖 Help"
+tab_chart, tab_backtest, tab_scanner, tab_alerts, tab_watchlist, tab_screener, tab_help = st.tabs([
+    "📊 Chart", "🧪 Backtest", "🔍 Live Scanner", "🔔 Alerts", "📋 Watchlist", "📡 Technical Screener", "📖 Help"
 ])
 
 # ══════════════════════════════════════════════
@@ -2687,7 +2687,511 @@ with tab_watchlist:
 
 
 # ══════════════════════════════════════════════
-# TAB 6: HELP
+# ══════════════════════════════════════════════
+# TAB 6: TECHNICAL SCREENER (Chartink-style)
+# ══════════════════════════════════════════════
+with tab_screener:
+    st.markdown("### 📡 Technical Screener")
+    st.markdown("Chartink jaise filters lagao — RSI, Supertrend, CCI, MFI, Stochastic, Ichimoku, High/Low patterns")
+
+    # ── Technical Indicator Functions ────────────
+    def compute_rsi(prices, period=14):
+        s = pd.Series(prices)
+        delta = s.diff()
+        gain = delta.where(delta>0, 0.0)
+        loss = -delta.where(delta<0, 0.0)
+        avg_gain = gain.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
+        avg_loss = loss.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
+        rs = avg_gain / avg_loss.replace(0, np.nan)
+        rsi = 100 - (100/(1+rs))
+        return rsi.values
+
+    def compute_stoch_rsi(prices, period=14, smooth_k=3, smooth_d=3):
+        rsi = pd.Series(compute_rsi(prices, period))
+        rsi_min = rsi.rolling(period).min()
+        rsi_max = rsi.rolling(period).max()
+        stoch_rsi = (rsi - rsi_min) / (rsi_max - rsi_min + 1e-10) * 100
+        k = stoch_rsi.rolling(smooth_k).mean()
+        d = k.rolling(smooth_d).mean()
+        return k.values, d.values
+
+    def compute_cci(high, low, close, period=20):
+        tp = (high + low + close) / 3
+        s = pd.Series(tp)
+        ma = s.rolling(period).mean()
+        mad = s.rolling(period).apply(lambda x: np.mean(np.abs(x - x.mean())), raw=True)
+        cci = (s - ma) / (0.015 * mad)
+        return cci.values
+
+    def compute_mfi(high, low, close, volume, period=14):
+        tp   = (high + low + close) / 3
+        rmf  = tp * volume
+        df_  = pd.DataFrame({'tp': tp, 'rmf': rmf})
+        pos  = df_['rmf'].where(df_['tp'] > df_['tp'].shift(1), 0)
+        neg  = df_['rmf'].where(df_['tp'] < df_['tp'].shift(1), 0)
+        pmf  = pos.rolling(period).sum()
+        nmf  = neg.rolling(period).sum()
+        mfr  = pmf / nmf.replace(0, np.nan)
+        mfi  = 100 - (100/(1+mfr))
+        return mfi.values
+
+    def compute_supertrend(high, low, close, period=7, multiplier=2.0):
+        hl2   = (high + low) / 2
+        s_h   = pd.Series(high); s_l = pd.Series(low); s_c = pd.Series(close)
+        atr_s = (s_h - s_l).rolling(period).mean()
+        upper = hl2 + multiplier * atr_s
+        lower = hl2 - multiplier * atr_s
+        n = len(close)
+        supertrend = np.full(n, np.nan)
+        direction  = np.full(n, 1)  # 1=bullish, -1=bearish
+        for i in range(1, n):
+            if np.isnan(upper.iloc[i]) or np.isnan(lower.iloc[i]):
+                continue
+            # Upper band
+            if upper.iloc[i] < upper.iloc[i-1] or close[i-1] > upper.iloc[i-1]:
+                up = upper.iloc[i]
+            else:
+                up = upper.iloc[i-1]
+            # Lower band
+            if lower.iloc[i] > lower.iloc[i-1] or close[i-1] < lower.iloc[i-1]:
+                lo = lower.iloc[i]
+            else:
+                lo = lower.iloc[i-1]
+            upper.iloc[i] = up
+            lower.iloc[i] = lo
+            if direction[i-1] == -1 and close[i] > up:
+                direction[i] = 1
+            elif direction[i-1] == 1 and close[i] < lo:
+                direction[i] = -1
+            else:
+                direction[i] = direction[i-1]
+            supertrend[i] = lo if direction[i] == 1 else up
+        return supertrend, direction
+
+    def compute_ichimoku(high, low, close):
+        h = pd.Series(high); l = pd.Series(low)
+        tenkan  = (h.rolling(9).max()  + l.rolling(9).min())  / 2
+        kijun   = (h.rolling(26).max() + l.rolling(26).min()) / 2
+        senkou_a = ((tenkan + kijun) / 2).shift(26)
+        senkou_b = ((h.rolling(52).max() + l.rolling(52).min()) / 2).shift(26)
+        chikou   = pd.Series(close).shift(-26)
+        return tenkan.values, kijun.values, senkou_a.values, senkou_b.values, chikou.values
+
+    def compute_fast_slow_stoch(high, low, close, k_period=14, d_period=3, slowing=3):
+        h = pd.Series(high); l = pd.Series(low); c = pd.Series(close)
+        lowest_low   = l.rolling(k_period).min()
+        highest_high = h.rolling(k_period).max()
+        fast_k = (c - lowest_low) / (highest_high - lowest_low + 1e-10) * 100
+        slow_k = fast_k.rolling(slowing).mean()
+        slow_d = slow_k.rolling(d_period).mean()
+        fast_d = fast_k.rolling(d_period).mean()
+        return fast_k.values, fast_d.values, slow_k.values, slow_d.values
+
+    def compute_sma(prices, period):
+        return pd.Series(prices).rolling(period).mean().values
+
+    def compute_ema(prices, period):
+        return pd.Series(prices).ewm(span=period, adjust=False).mean().values
+
+    # ─────────────────────────────────────────────
+    # SCREEN BUILDER UI
+    # ─────────────────────────────────────────────
+
+    # Source selection
+    scr_src_c1, scr_src_c2 = st.columns([1,1])
+    with scr_src_c1:
+        scr_source = st.radio("📂 Stocks",
+            ["📋 Watchlist", "🏆 Category/Index", "✏️ Custom"],
+            horizontal=True, key="scr_source")
+    with scr_src_c2:
+        scr_tf = st.selectbox("⏱ Timeframe", list(TIMEFRAMES.keys()), index=7, key="scr_tf")
+
+    scr_symbols = []
+    if scr_source == "📋 Watchlist":
+        if 'watchlists' in st.session_state and st.session_state.watchlists:
+            scr_wl = st.selectbox("Watchlist", list(st.session_state.watchlists.keys()), key="scr_wl")
+            scr_symbols = st.session_state.watchlists.get(scr_wl, [])
+            st.caption(f"✅ {len(scr_symbols)} stocks")
+        else:
+            st.warning("Koi watchlist nahi — Watchlist tab mein banao")
+    elif scr_source == "🏆 Category/Index":
+        scr_cat_opts = ["⭐ ALL"] + list(INDEX_DATABASE.keys())
+        scr_cat = st.selectbox("Category", scr_cat_opts, key="scr_cat")
+        if scr_cat == "⭐ ALL":
+            for cat_v in INDEX_DATABASE.values():
+                scr_symbols += [v for v in cat_v.values() if v != "CUSTOM"]
+        else:
+            scr_symbols = [v for v in INDEX_DATABASE.get(scr_cat,{}).values() if v != "CUSTOM"]
+        scr_symbols = list(dict.fromkeys(scr_symbols))
+        st.caption(f"✅ {len(scr_symbols)} stocks")
+    else:
+        scr_custom = st.text_area("Symbols (comma separated)",
+            value="RELIANCE.NS, TCS.NS, INFY.NS, HDFCBANK.NS",
+            height=60, label_visibility="collapsed", key="scr_custom")
+        scr_symbols = list(dict.fromkeys([s.strip().upper() for s in scr_custom.replace('\n',',').split(',') if s.strip()]))
+        st.caption(f"✅ {len(scr_symbols)} symbols")
+
+    st.divider()
+
+    # ─────────────────────────────────────────────
+    # FILTER BUILDER
+    # ─────────────────────────────────────────────
+    st.markdown("#### 🔧 Filters (AND Conditions — sab sahi hone chahiye)")
+
+    # Initialize filters in session state
+    if 'scr_filters' not in st.session_state:
+        st.session_state.scr_filters = [
+            {"enabled": True,  "indicator": "RSI",         "condition": "Greater Than", "value": 50.0,  "period": 14},
+            {"enabled": False, "indicator": "Supertrend",  "condition": "Bullish",      "value": 0.0,   "period": 7},
+            {"enabled": False, "indicator": "CCI",         "condition": "Greater Than", "value": 200.0, "period": 20},
+        ]
+
+    FILTER_INDICATORS = [
+        "RSI", "StochRSI %K", "StochRSI %D",
+        "CCI", "MFI",
+        "Supertrend",
+        "Ichimoku Cloud (Close above Cloud)", "Ichimoku Cloud (Close below Cloud)",
+        "Fast Stoch %K > Slow Stoch %K", "Fast Stoch %D > Slow Stoch %D",
+        "SMA Cross (Fast > Slow)", "EMA Cross (Fast > Slow)",
+        "Daily High > N-day High", "Daily Low > N-day Low",
+        "Daily Close > N-day Open",
+        "RSI Divergence (Oversold)", "RSI Divergence (Overbought)",
+        "Price > Upper BB", "Price < Lower BB",
+        "Volume > Avg Volume",
+    ]
+
+    CONDITION_MAP = {
+        "RSI":                                ["Greater Than", "Less Than", "Crossing Above", "Crossing Below"],
+        "StochRSI %K":                        ["Greater Than", "Less Than", "Crossing Above", "Crossing Below"],
+        "StochRSI %D":                        ["Greater Than", "Less Than"],
+        "CCI":                                ["Greater Than", "Less Than"],
+        "MFI":                                ["Greater Than", "Less Than"],
+        "Supertrend":                         ["Bullish", "Bearish"],
+        "Ichimoku Cloud (Close above Cloud)": ["True"],
+        "Ichimoku Cloud (Close below Cloud)": ["True"],
+        "Fast Stoch %K > Slow Stoch %K":     ["True", "False"],
+        "Fast Stoch %D > Slow Stoch %D":     ["True", "False"],
+        "SMA Cross (Fast > Slow)":            ["True", "False"],
+        "EMA Cross (Fast > Slow)":            ["True", "False"],
+        "Daily High > N-day High":            ["True"],
+        "Daily Low > N-day Low":              ["True"],
+        "Daily Close > N-day Open":           ["True"],
+        "RSI Divergence (Oversold)":          ["True"],
+        "RSI Divergence (Overbought)":        ["True"],
+        "Price > Upper BB":                   ["True"],
+        "Price < Lower BB":                   ["True"],
+        "Volume > Avg Volume":                ["True"],
+    }
+
+    # Render filter rows
+    for i, flt in enumerate(st.session_state.scr_filters):
+        fc = st.columns([0.5, 2, 2, 1.5, 1, 0.5])
+        with fc[0]:
+            en = st.checkbox("", value=flt["enabled"], key=f"scr_en_{i}_{flt['indicator']}")
+            st.session_state.scr_filters[i]["enabled"] = en
+        with fc[1]:
+            ind = st.selectbox("Indicator", FILTER_INDICATORS,
+                index=FILTER_INDICATORS.index(flt["indicator"]) if flt["indicator"] in FILTER_INDICATORS else 0,
+                key=f"scr_ind_{i}", label_visibility="collapsed")
+            st.session_state.scr_filters[i]["indicator"] = ind
+        with fc[2]:
+            cond_opts = CONDITION_MAP.get(ind, ["Greater Than", "Less Than"])
+            cond_idx  = cond_opts.index(flt["condition"]) if flt["condition"] in cond_opts else 0
+            cond = st.selectbox("Condition", cond_opts, index=cond_idx,
+                key=f"scr_cond_{i}", label_visibility="collapsed")
+            st.session_state.scr_filters[i]["condition"] = cond
+        with fc[3]:
+            if cond not in ["True", "False", "Bullish", "Bearish"]:
+                val = st.number_input("Value", value=float(flt["value"]),
+                    key=f"scr_val_{i}", label_visibility="collapsed")
+                st.session_state.scr_filters[i]["value"] = val
+            else:
+                st.empty()
+                val = flt["value"]
+        with fc[4]:
+            prd = st.number_input("Period", value=int(flt["period"]), min_value=1, max_value=200,
+                key=f"scr_prd_{i}", label_visibility="collapsed")
+            st.session_state.scr_filters[i]["period"] = prd
+        with fc[5]:
+            if st.button("❌", key=f"scr_del_{i}") and len(st.session_state.scr_filters) > 1:
+                st.session_state.scr_filters.pop(i)
+                st.rerun()
+
+    # Add filter button
+    af1, af2, _ = st.columns([1,1,3])
+    with af1:
+        if st.button("➕ Filter Add Karo") and len(st.session_state.scr_filters) < 10:
+            st.session_state.scr_filters.append(
+                {"enabled": True, "indicator": "RSI", "condition": "Greater Than", "value": 50.0, "period": 14})
+            st.rerun()
+    with af2:
+        active_filters = [f for f in st.session_state.scr_filters if f["enabled"]]
+        st.caption(f"{len(active_filters)} active filters")
+
+    st.divider()
+
+    # ─────────────────────────────────────────────
+    # RUN SCREENER
+    # ─────────────────────────────────────────────
+    scr_c1, scr_c2 = st.columns([3,1])
+    with scr_c1:
+        st.markdown(f"**Screening:** {len(scr_symbols)} stocks × {len(active_filters)} filters")
+    with scr_c2:
+        run_screener = st.button("🚀 Run Screener", type="primary", use_container_width=True)
+
+    if run_screener:
+        if not scr_symbols:
+            st.error("❌ Koi symbol nahi!")
+        elif not active_filters:
+            st.error("❌ Koi active filter nahi!")
+        else:
+            iv_scr, per_scr = TIMEFRAMES[scr_tf]
+            matched = []
+            prog_scr = st.progress(0)
+            status_scr = st.empty()
+
+            for i_scr, sym_scr in enumerate(scr_symbols):
+                status_scr.text(f"⏳ Screening {sym_scr}... ({i_scr+1}/{len(scr_symbols)})")
+                df_scr = fetch_data(sym_scr, iv_scr, per_scr)
+
+                if df_scr.empty or len(df_scr) < 60:
+                    prog_scr.progress((i_scr+1)/len(scr_symbols))
+                    continue
+
+                try:
+                    close_a = df_scr['Close'].values.flatten().astype(float)
+                    high_a  = df_scr['High'].values.flatten().astype(float)  if 'High' in df_scr.columns else close_a
+                    low_a   = df_scr['Low'].values.flatten().astype(float)   if 'Low'  in df_scr.columns else close_a
+                    vol_a   = df_scr['Volume'].values.flatten().astype(float) if 'Volume' in df_scr.columns else np.ones(len(close_a))
+
+                    # Pre-compute all indicators once per stock
+                    cached = {}
+                    def get_ind(name, period):
+                        key = f"{name}_{period}"
+                        if key in cached: return cached[key]
+                        if name == "RSI":
+                            cached[key] = compute_rsi(close_a, period); return cached[key]
+                        if name in ("StochRSI %K","StochRSI %D"):
+                            k,d = compute_stoch_rsi(close_a, period)
+                            cached[f"StochRSI %K_{period}"] = k
+                            cached[f"StochRSI %D_{period}"] = d
+                            return cached[key]
+                        if name == "CCI":
+                            cached[key] = compute_cci(high_a, low_a, close_a, period); return cached[key]
+                        if name == "MFI":
+                            cached[key] = compute_mfi(high_a, low_a, close_a, vol_a, period); return cached[key]
+                        return np.full(len(close_a), np.nan)
+
+                    # Evaluate all active filters
+                    all_pass = True
+                    filter_vals = {}
+
+                    for flt in active_filters:
+                        ind  = flt["indicator"]
+                        cond = flt["condition"]
+                        val  = float(flt["value"])
+                        prd  = int(flt["period"])
+                        passed = False
+
+                        # ── RSI ──────────────────────────────
+                        if ind == "RSI":
+                            rsi = get_ind("RSI", prd)
+                            curr = rsi[-1]; prev = rsi[-2] if len(rsi)>1 else curr
+                            filter_vals["RSI"] = round(float(curr),2)
+                            if cond == "Greater Than":       passed = curr > val
+                            elif cond == "Less Than":        passed = curr < val
+                            elif cond == "Crossing Above":   passed = curr > val and prev <= val
+                            elif cond == "Crossing Below":   passed = curr < val and prev >= val
+
+                        # ── StochRSI ─────────────────────────
+                        elif ind in ("StochRSI %K","StochRSI %D"):
+                            arr = get_ind(ind, prd)
+                            curr = arr[-1]; prev = arr[-2] if len(arr)>1 else curr
+                            filter_vals[ind] = round(float(curr),2)
+                            if cond == "Greater Than":     passed = curr > val
+                            elif cond == "Less Than":      passed = curr < val
+                            elif cond == "Crossing Above": passed = curr > val and prev <= val
+                            elif cond == "Crossing Below": passed = curr < val and prev >= val
+
+                        # ── CCI ──────────────────────────────
+                        elif ind == "CCI":
+                            cci = get_ind("CCI", prd)
+                            curr = cci[-1]
+                            filter_vals["CCI"] = round(float(curr),2)
+                            if cond == "Greater Than": passed = curr > val
+                            elif cond == "Less Than":  passed = curr < val
+
+                        # ── MFI ──────────────────────────────
+                        elif ind == "MFI":
+                            mfi = get_ind("MFI", prd)
+                            curr = mfi[-1]
+                            filter_vals["MFI"] = round(float(curr),2)
+                            if cond == "Greater Than": passed = curr > val
+                            elif cond == "Less Than":  passed = curr < val
+
+                        # ── Supertrend ───────────────────────
+                        elif ind == "Supertrend":
+                            _, direction = compute_supertrend(high_a, low_a, close_a, prd, 2.0)
+                            d = direction[-1]
+                            filter_vals["Supertrend"] = "Bullish 📈" if d==1 else "Bearish 📉"
+                            if cond == "Bullish": passed = d == 1
+                            elif cond == "Bearish": passed = d == -1
+
+                        # ── Ichimoku ─────────────────────────
+                        elif "Ichimoku" in ind:
+                            ten, kij, sen_a, sen_b, _ = compute_ichimoku(high_a, low_a, close_a)
+                            cl = close_a[-1]
+                            cloud_top = max(sen_a[-1] if not np.isnan(sen_a[-1]) else 0,
+                                           sen_b[-1] if not np.isnan(sen_b[-1]) else 0)
+                            cloud_bot = min(sen_a[-1] if not np.isnan(sen_a[-1]) else 0,
+                                           sen_b[-1] if not np.isnan(sen_b[-1]) else 0)
+                            filter_vals["Ichimoku Cloud Top"] = round(cloud_top,2)
+                            if "above" in ind: passed = cl > cloud_top
+                            else:              passed = cl < cloud_bot
+
+                        # ── Fast/Slow Stochastic ─────────────
+                        elif "Stoch" in ind and "RSI" not in ind:
+                            fk, fd, sk, sd = compute_fast_slow_stoch(high_a, low_a, close_a, prd)
+                            filter_vals["Fast Stoch %K"] = round(float(fk[-1]),2)
+                            filter_vals["Slow Stoch %K"] = round(float(sk[-1]),2)
+                            if "Fast Stoch %K" in ind: passed = fk[-1] > sk[-1]
+                            else:                      passed = fd[-1] > sd[-1]
+
+                        # ── SMA Cross ────────────────────────
+                        elif "SMA Cross" in ind:
+                            fast_p = max(1, prd//2)
+                            sma_f = compute_sma(close_a, fast_p)
+                            sma_s = compute_sma(close_a, prd)
+                            filter_vals[f"SMA{fast_p}"] = round(float(sma_f[-1]),2)
+                            filter_vals[f"SMA{prd}"] = round(float(sma_s[-1]),2)
+                            passed = sma_f[-1] > sma_s[-1]
+
+                        # ── EMA Cross ────────────────────────
+                        elif "EMA Cross" in ind:
+                            fast_p = max(1, prd//2)
+                            ema_f = compute_ema(close_a, fast_p)
+                            ema_s = compute_ema(close_a, prd)
+                            filter_vals[f"EMA{fast_p}"] = round(float(ema_f[-1]),2)
+                            filter_vals[f"EMA{prd}"] = round(float(ema_s[-1]),2)
+                            passed = ema_f[-1] > ema_s[-1]
+
+                        # ── Daily High > N-day High ───────────
+                        elif "Daily High" in ind:
+                            hi_s = pd.Series(high_a)
+                            passed = high_a[-1] > hi_s.iloc[-prd-1:-1].max() if len(high_a) > prd else False
+                            filter_vals["N-day High"] = round(float(hi_s.iloc[-prd-1:-1].max()),2) if len(high_a)>prd else 0
+
+                        # ── Daily Low > N-day Low ─────────────
+                        elif "Daily Low" in ind:
+                            lo_s = pd.Series(low_a)
+                            passed = low_a[-1] > lo_s.iloc[-prd-1:-1].min() if len(low_a) > prd else False
+                            filter_vals["N-day Low"] = round(float(lo_s.iloc[-prd-1:-1].min()),2) if len(low_a)>prd else 0
+
+                        # ── Daily Close > N-day Open ──────────
+                        elif "Daily Close" in ind and "Open" in ind:
+                            open_a = df_scr['Open'].values.flatten().astype(float) if 'Open' in df_scr.columns else close_a
+                            passed = close_a[-1] > open_a[-prd] if len(open_a) > prd else False
+
+                        # ── Bollinger ─────────────────────────
+                        elif "BB" in ind:
+                            _, bb_u, bb_l = compute_bollinger_bands(close_a, prd, 2.0)
+                            filter_vals["BB Upper"] = round(float(bb_u[-1]),2)
+                            filter_vals["BB Lower"] = round(float(bb_l[-1]),2)
+                            if "Upper" in ind: passed = close_a[-1] > bb_u[-1]
+                            else:              passed = close_a[-1] < bb_l[-1]
+
+                        # ── Volume > Avg Volume ───────────────
+                        elif "Volume" in ind:
+                            avg_vol = np.nanmean(vol_a[-prd:])
+                            filter_vals["Volume"] = int(vol_a[-1])
+                            filter_vals["Avg Vol"] = int(avg_vol)
+                            passed = vol_a[-1] > avg_vol
+
+                        # ── RSI Divergence ────────────────────
+                        elif "RSI Divergence" in ind:
+                            rsi = compute_rsi(close_a, prd)
+                            if "Oversold" in ind:   passed = rsi[-1] < 30
+                            else:                   passed = rsi[-1] > 70
+                            filter_vals["RSI (Div)"] = round(float(rsi[-1]),2)
+
+                        if not passed:
+                            all_pass = False
+                            break
+
+                    if all_pass:
+                        row = {"Symbol": sym_scr, "Price": f"₹{close_a[-1]:,.2f}"}
+                        row.update({k: v for k, v in filter_vals.items()})
+                        row["Time"] = str(df_scr.index[-1])[:16]
+                        matched.append(row)
+
+                except Exception as e_scr:
+                    pass  # Skip stocks that fail
+
+                prog_scr.progress((i_scr+1)/len(scr_symbols))
+
+            status_scr.empty()
+            prog_scr.empty()
+
+            # ── Results ──────────────────────────
+            st.markdown(f"#### 🎯 {len(matched)} stocks matched all filters (out of {len(scr_symbols)} scanned)")
+
+            if matched:
+                # Summary cards
+                m1, m2, m3 = st.columns(3)
+                m1.markdown(f'<div class="metric-card"><div class="label">Total Scanned</div><div class="value">{len(scr_symbols)}</div></div>', unsafe_allow_html=True)
+                m2.markdown(f'<div class="metric-card"><div class="label">✅ Matched</div><div class="value green">{len(matched)}</div></div>', unsafe_allow_html=True)
+                m3.markdown(f'<div class="metric-card"><div class="label">❌ Filtered Out</div><div class="value red">{len(scr_symbols)-len(matched)}</div></div>', unsafe_allow_html=True)
+                st.write("")
+
+                res_scr = pd.DataFrame(matched)
+                st.dataframe(res_scr, use_container_width=True, height=min(500, len(matched)*50+60))
+
+                # Action buttons
+                btn1, btn2, _ = st.columns([1,1,2])
+                with btn1:
+                    st.download_button("⬇ CSV Download", res_scr.to_csv(index=False),
+                        f"screener_{scr_tf}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M')}.csv", "text/csv")
+                with btn2:
+                    if st.button("📱 Telegram Bhejo", key="scr_tg_btn"):
+                        if 'tg_token' in st.session_state and st.session_state.tg_token:
+                            syms = [r["Symbol"] for r in matched]
+                            msg = f"📡 <b>Technical Screener</b>\n━━━━━━━━━━━━━\n"
+                            msg += f"⏱ TF: {scr_tf} | Matched: {len(matched)}/{len(scr_symbols)}\n\n"
+                            msg += "✅ <b>Stocks:</b>\n" + "\n".join([f"• {s}" for s in syms[:30]])
+                            try:
+                                r = requests.post(
+                                    f"https://api.telegram.org/bot{st.session_state.tg_token}/sendMessage",
+                                    json={"chat_id": st.session_state.tg_chat_id,
+                                          "text": msg, "parse_mode": "HTML"}, timeout=10)
+                                if r.status_code == 200: st.success("📱 Telegram pe bheja!")
+                                else: st.error(f"❌ {r.text[:100]}")
+                            except Exception as e_tg: st.error(f"❌ {e_tg}")
+                        else:
+                            st.warning("Alert tab mein Telegram setup karo!")
+
+                # Add to watchlist option
+                st.markdown("---")
+                if st.session_state.get('watchlists'):
+                    wl_add_c1, wl_add_c2 = st.columns([2,1])
+                    with wl_add_c1:
+                        target_wl = st.selectbox("📋 Watchlist mein add karo",
+                            list(st.session_state.watchlists.keys()), key="scr_add_wl")
+                    with wl_add_c2:
+                        st.write("")
+                        if st.button("➕ Add to Watchlist"):
+                            added = 0
+                            for r in matched:
+                                s = r["Symbol"]
+                                if s not in st.session_state.watchlists[target_wl]:
+                                    st.session_state.watchlists[target_wl].append(s)
+                                    added += 1
+                            st.success(f"✅ {added} stocks added to '{target_wl}'!")
+            else:
+                st.info("⚪ Koi stock sab filters pass nahi kar paya. Filters loosens karo ya alag timeframe try karo.")
+
+# ══════════════════════════════════════════════
+# TAB 7: HELP
+# ══════════════════════════════════════════════
 # ══════════════════════════════════════════════
 with tab_help:
     st.markdown("""
