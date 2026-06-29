@@ -2177,61 +2177,40 @@ with tab_scanner:
                 # ── AUTO-SEND TO TELEGRAM ────────────────────
                 buy_auto  = res_df[res_df["Signal"]=="BUY"]["Symbol"].tolist()
                 sell_auto = res_df[res_df["Signal"]=="SELL"]["Symbol"].tolist()
-                has_signals = bool(buy_auto or sell_auto)
 
-                # Get token from session state (loaded from secrets/file)
                 _tok = str(st.session_state.get("tg_token","")).strip()
                 _cid = str(st.session_state.get("tg_chat_id","")).strip()
-                telegram_ready = bool(_tok and _cid and len(_tok) > 10)
 
-                # Send if: checkbox ON or signals found — AND telegram configured
-                should_send = (auto_tg_save or has_signals) and telegram_ready
-
-                if should_send:
+                if _tok and _cid and len(_tok) > 10:
                     scan_time = pd.Timestamp.now().strftime("%d-%b-%Y %H:%M")
-                    auto_msg  = f"📊 <b>NW Band Scanner</b>\n━━━━━━━━━━━━━\n"
-                    auto_msg += f"🕐 {scan_time}\n"
-                    auto_msg += f"⏱ TF: {scan_tf_tab}\n"
-                    auto_msg += f"📈 Scanned: {len(results)} stocks\n\n"
-
+                    msg  = f"📊 <b>NW Band Scanner</b>\n━━━━━━━━━━━━━\n"
+                    msg += f"🕐 {scan_time}\n"
+                    msg += f"⏱ TF: {scan_tf_tab}\n"
+                    msg += f"📈 Scanned: {len(results)} stocks\n\n"
                     if buy_auto:
-                        auto_msg += f"✅ <b>BUY Lower Band ({len(buy_auto)})</b>:\n"
-                        auto_msg += "\n".join([f"• {s}" for s in buy_auto[:25]])
-                        auto_msg += "\n\n"
+                        msg += f"✅ <b>BUY ({len(buy_auto)})</b>:\n"
+                        msg += "\n".join([f"• {s}" for s in buy_auto[:25]]) + "\n\n"
                     if sell_auto:
-                        auto_msg += f"🔴 <b>SELL Upper Band ({len(sell_auto)})</b>:\n"
-                        auto_msg += "\n".join([f"• {s}" for s in sell_auto[:25]])
-                        auto_msg += "\n\n"
-                    if not has_signals:
-                        auto_msg += "⚪ Koi BUY/SELL signal nahi mila\n\n"
-                    auto_msg += "━━━━━━━━━━━━━"
-
+                        msg += f"🔴 <b>SELL ({len(sell_auto)})</b>:\n"
+                        msg += "\n".join([f"• {s}" for s in sell_auto[:25]]) + "\n\n"
+                    if not buy_auto and not sell_auto:
+                        msg += "⚪ Koi signal nahi mila\n\n"
+                    msg += "━━━━━━━━━━━━━"
                     try:
-                        r_auto = requests.post(
+                        r_tg = requests.post(
                             f"https://api.telegram.org/bot{_tok}/sendMessage",
-                            json={"chat_id": _cid,
-                                  "text": auto_msg,
-                                  "parse_mode": "HTML"},
+                            json={"chat_id":_cid,"text":msg,"parse_mode":"HTML"},
                             timeout=15
                         )
-                        if r_auto.status_code == 200:
-                            st.toast("📱 Telegram pe bhej diya!", icon="✅")
-                        elif r_auto.status_code == 401:
-                            st.warning("⚠️ Token galat! Alerts tab mein check karo.")
-                        elif r_auto.status_code == 400:
-                            err_d = r_auto.json().get("description","")
-                            if "chat not found" in err_d.lower():
-                                st.warning("⚠️ Chat ID galat! Alerts tab mein check karo.")
-                            else:
-                                st.warning(f"⚠️ Telegram: {err_d}")
+                        if r_tg.status_code == 200:
+                            st.success(f"✅ Telegram sent! BUY={len(buy_auto)} SELL={len(sell_auto)}")
                         else:
-                            st.warning(f"⚠️ HTTP {r_auto.status_code}: {r_auto.text[:80]}")
-                    except requests.exceptions.Timeout:
-                        st.warning("⚠️ Telegram timeout")
-                    except Exception as e_auto:
-                        st.warning(f"⚠️ Telegram error: {e_auto}")
-                elif not telegram_ready and auto_tg_save:
-                    st.warning("⚠️ Telegram token nahi mila — Alerts tab mein Token+Chat ID save karo!")
+                            st.error(f"❌ Telegram Error {r_tg.status_code}: {r_tg.text[:150]}")
+                    except Exception as e_tg2:
+                        st.error(f"❌ Telegram: {e_tg2}")
+                else:
+                    st.warning("⚠️ Telegram token nahi — Alerts tab mein save karo!")
+
 
                 # ── Apply Signal Filter ───────────
                 if signal_filter == "✅ BUY Only (Lower Band)":
