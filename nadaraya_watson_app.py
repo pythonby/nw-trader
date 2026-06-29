@@ -2085,11 +2085,13 @@ with tab_scanner:
         key="auto_tg_scan_save",
         help="ON hone par scan complete hote hi BUY/SELL signals Telegram pe chale jayenge"
     )
-    if auto_tg_save:
-        if st.session_state.get('tg_token','') and st.session_state.get('tg_chat_id',''):
-            st.caption("✅ Auto Telegram ON — signals milne par message aayega")
-        else:
-            st.warning("⚠️ Alerts tab mein Telegram Token+Chat ID save karo!")
+    # Show telegram status clearly
+    _tok_check = str(st.session_state.get("tg_token","")).strip()
+    _cid_check = str(st.session_state.get("tg_chat_id","")).strip()
+    if _tok_check and _cid_check and len(_tok_check) > 10:
+        st.caption(f"✅ Telegram ready — Token: ...{_tok_check[-6:]} | Chat: {_cid_check}")
+    else:
+        st.warning("⚠️ Telegram token nahi mila! Alerts tab → Telegram Config mein Token + Chat ID save karo, phir scan karo.")
 
     st.write("")
 
@@ -2177,10 +2179,13 @@ with tab_scanner:
                 sell_auto = res_df[res_df["Signal"]=="SELL"]["Symbol"].tolist()
                 has_signals = bool(buy_auto or sell_auto)
 
-                # Auto-send: always when signals found OR when checkbox ON
-                should_send = (auto_tg_save or has_signals) and \
-                              st.session_state.get('tg_token','') and \
-                              st.session_state.get('tg_chat_id','')
+                # Get token from session state (loaded from secrets/file)
+                _tok = str(st.session_state.get("tg_token","")).strip()
+                _cid = str(st.session_state.get("tg_chat_id","")).strip()
+                telegram_ready = bool(_tok and _cid and len(_tok) > 10)
+
+                # Send if: checkbox ON or signals found — AND telegram configured
+                should_send = (auto_tg_save or has_signals) and telegram_ready
 
                 if should_send:
                     scan_time = pd.Timestamp.now().strftime("%d-%b-%Y %H:%M")
@@ -2203,27 +2208,30 @@ with tab_scanner:
 
                     try:
                         r_auto = requests.post(
-                            f"https://api.telegram.org/bot{st.session_state.tg_token}/sendMessage",
-                            json={"chat_id": st.session_state.tg_chat_id,
-                                  "text": auto_msg, "parse_mode": "HTML"},
+                            f"https://api.telegram.org/bot{_tok}/sendMessage",
+                            json={"chat_id": _cid,
+                                  "text": auto_msg,
+                                  "parse_mode": "HTML"},
                             timeout=15
                         )
                         if r_auto.status_code == 200:
                             st.toast("📱 Telegram pe bhej diya!", icon="✅")
                         elif r_auto.status_code == 401:
-                            st.warning("⚠️ Telegram: Token galat! Alerts tab mein check karo.")
+                            st.warning("⚠️ Token galat! Alerts tab mein check karo.")
                         elif r_auto.status_code == 400:
-                            err_desc = r_auto.json().get("description","")
-                            if "chat not found" in err_desc.lower():
-                                st.warning("⚠️ Telegram: Chat ID galat!")
+                            err_d = r_auto.json().get("description","")
+                            if "chat not found" in err_d.lower():
+                                st.warning("⚠️ Chat ID galat! Alerts tab mein check karo.")
                             else:
-                                st.warning(f"⚠️ Telegram error: {err_desc}")
+                                st.warning(f"⚠️ Telegram: {err_d}")
                         else:
-                            st.warning(f"⚠️ Telegram HTTP {r_auto.status_code}")
+                            st.warning(f"⚠️ HTTP {r_auto.status_code}: {r_auto.text[:80]}")
                     except requests.exceptions.Timeout:
-                        st.warning("⚠️ Telegram timeout — dobara scan karo")
+                        st.warning("⚠️ Telegram timeout")
                     except Exception as e_auto:
-                        st.warning(f"⚠️ Telegram: {e_auto}")
+                        st.warning(f"⚠️ Telegram error: {e_auto}")
+                elif not telegram_ready and auto_tg_save:
+                    st.warning("⚠️ Telegram token nahi mila — Alerts tab mein Token+Chat ID save karo!")
 
                 # ── Apply Signal Filter ───────────
                 if signal_filter == "✅ BUY Only (Lower Band)":
