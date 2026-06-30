@@ -161,6 +161,339 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────────────────────────
+# BACKGROUND AUTO-SCANNER (triggered by UptimeRobot pings)
+# Jab bhi koi (ya UptimeRobot bot) is URL ko kholta hai,
+# saved active alerts automatically check ho jaate hain
+# aur Telegram pe bhej diye jaate hain — bina manually
+# "Check Now" dabaye.
+# ─────────────────────────────────────────────────────────────────
+
+def compute_rsi(prices, period=14):
+    s = pd.Series(prices)
+    delta = s.diff()
+    gain = delta.where(delta>0, 0.0)
+    loss = -delta.where(delta<0, 0.0)
+    avg_gain = gain.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
+    rs = avg_gain / avg_loss.replace(0, np.nan)
+    rsi = 100 - (100/(1+rs))
+    return rsi.values
+
+def compute_stoch_rsi(prices, period=14, smooth_k=3, smooth_d=3):
+    rsi = pd.Series(compute_rsi(prices, period))
+    rsi_min = rsi.rolling(period).min()
+    rsi_max = rsi.rolling(period).max()
+    stoch_rsi = (rsi - rsi_min) / (rsi_max - rsi_min + 1e-10) * 100
+    k = stoch_rsi.rolling(smooth_k).mean()
+    d = k.rolling(smooth_d).mean()
+    return k.values, d.values
+
+def compute_cci(high, low, close, period=20):
+    tp = (high + low + close) / 3
+    s = pd.Series(tp)
+    ma = s.rolling(period).mean()
+    mad = s.rolling(period).apply(lambda x: np.mean(np.abs(x - x.mean())), raw=True)
+    cci = (s - ma) / (0.015 * mad)
+    return cci.values
+
+def compute_mfi(high, low, close, volume, period=14):
+    tp   = (high + low + close) / 3
+    rmf  = tp * volume
+    df_  = pd.DataFrame({'tp': tp, 'rmf': rmf})
+    pos  = df_['rmf'].where(df_['tp'] > df_['tp'].shift(1), 0)
+    neg  = df_['rmf'].where(df_['tp'] < df_['tp'].shift(1), 0)
+    pmf  = pos.rolling(period).sum()
+    nmf  = neg.rolling(period).sum()
+    mfr  = pmf / nmf.replace(0, np.nan)
+    mfi  = 100 - (100/(1+mfr))
+    return mfi.values
+
+def compute_supertrend(high, low, close, period=7, multiplier=2.0):
+    hl2   = (high + low) / 2
+    s_h   = pd.Series(high); s_l = pd.Series(low); s_c = pd.Series(close)
+    atr_s = (s_h - s_l).rolling(period).mean()
+    upper = hl2 + multiplier * atr_s
+    lower = hl2 - multiplier * atr_s
+    n = len(close)
+    supertrend = np.full(n, np.nan)
+    direction  = np.full(n, 1)  # 1=bullish, -1=bearish
+    for i in range(1, n):
+        if np.isnan(upper.iloc[i]) or np.isnan(lower.iloc[i]):
+            continue
+        # Upper band
+        if upper.iloc[i] < upper.iloc[i-1] or close[i-1] > upper.iloc[i-1]:
+            up = upper.iloc[i]
+        else:
+            up = upper.iloc[i-1]
+        # Lower band
+        if lower.iloc[i] > lower.iloc[i-1] or close[i-1] < lower.iloc[i-1]:
+            lo = lower.iloc[i]
+        else:
+            lo = lower.iloc[i-1]
+        upper.iloc[i] = up
+        lower.iloc[i] = lo
+        if direction[i-1] == -1 and close[i] > up:
+            direction[i] = 1
+        elif direction[i-1] == 1 and close[i] < lo:
+            direction[i] = -1
+        else:
+            direction[i] = direction[i-1]
+        supertrend[i] = lo if direction[i] == 1 else up
+    return supertrend, direction
+
+def compute_ichimoku(high, low, close):
+    h = pd.Series(high); l = pd.Series(low)
+    tenkan  = (h.rolling(9).max()  + l.rolling(9).min())  / 2
+    kijun   = (h.rolling(26).max() + l.rolling(26).min()) / 2
+    senkou_a = ((tenkan + kijun) / 2).shift(26)
+    senkou_b = ((h.rolling(52).max() + l.rolling(52).min()) / 2).shift(26)
+    chikou   = pd.Series(close).shift(-26)
+    return tenkan.values, kijun.values, senkou_a.values, senkou_b.values, chikou.values
+
+def compute_fast_slow_stoch(high, low, close, k_period=14, d_period=3, slowing=3):
+    h = pd.Series(high); l = pd.Series(low); c = pd.Series(close)
+    lowest_low   = l.rolling(k_period).min()
+    highest_high = h.rolling(k_period).max()
+    fast_k = (c - lowest_low) / (highest_high - lowest_low + 1e-10) * 100
+    slow_k = fast_k.rolling(slowing).mean()
+    slow_d = slow_k.rolling(d_period).mean()
+    fast_d = fast_k.rolling(d_period).mean()
+    return fast_k.values, fast_d.values, slow_k.values, slow_d.values
+
+def compute_sma(prices, period):
+    return pd.Series(prices).rolling(period).mean().values
+
+def compute_ema(prices, period):
+    return pd.Series(prices).ewm(span=period, adjust=False).mean().values
+
+def check_indicator_condition(df_c, al_cfg_c):
+    """Check if technical indicator condition is met for last bar"""
+    ind_c    = al_cfg_c.get("indicator_used","NW Envelope / Bollinger Bands (Band Touch)")
+    params_c = al_cfg_c.get("ind_params",{})
+    buy_c    = al_cfg_c.get("buy", True)
+    sell_c   = al_cfg_c.get("sell", False)
+    prices_c = df_c["Close"].values.flatten().astype(float)
+    high_c   = df_c["High"].values.flatten().astype(float) if "High" in df_c.columns else prices_c
+    low_c    = df_c["Low"].values.flatten().astype(float)  if "Low"  in df_c.columns else prices_c
+    vol_c    = df_c["Volume"].values.flatten().astype(float) if "Volume" in df_c.columns else np.ones(len(prices_c))
+    n_c      = len(prices_c)
+    if n_c < 10: return False, "BUY", "Not enough data", {}
+
+    result_vals = {}
+
+    if "NW Envelope" in ind_c or "Bollinger" in ind_c:
+        _, up_c, lo_c = compute_indicator(prices_c, indicator_choice, bandwidth, mult, min(lookback, n_c-1))
+        price_last = prices_c[-1]
+        up_last    = up_c[-1] if not np.isnan(up_c[-1]) else 0
+        lo_last    = lo_c[-1] if not np.isnan(lo_c[-1]) else 0
+        dist_up = round((up_last-price_last)/price_last*100,2) if up_last else 999
+        dist_lo = round((price_last-lo_last)/price_last*100,2) if lo_last else 999
+        near_up = dist_up<=0.5 or price_last>=up_last
+        near_lo = dist_lo<=0.5 or price_last<=lo_last
+        result_vals = {"Price": round(price_last,2), "Upper": round(up_last,2), "Lower": round(lo_last,2)}
+        if near_up and sell_c: return True, "SELL", f"Upper Band Touch ({dist_up}%)", result_vals
+        if near_lo and buy_c:  return True, "BUY",  f"Lower Band Touch ({dist_lo}%)", result_vals
+        return False, "", "", result_vals
+
+    elif ind_c == "RSI":
+        p   = int(params_c.get("rsi_period",14))
+        cnd = params_c.get("rsi_condition","RSI > Value (Above)")
+        val = float(params_c.get("rsi_value",60))
+        rsi_arr = compute_rsi(prices_c, p)
+        curr = rsi_arr[-1]; prev = rsi_arr[-2] if n_c>1 else curr
+        result_vals = {f"RSI({p})": round(float(curr),2), "Value": val}
+        triggered = False
+        if "Above" in cnd and "Crosses" not in cnd: triggered = curr > val
+        elif "Below" in cnd and "Crosses" not in cnd: triggered = curr < val
+        elif "Crosses Above" in cnd: triggered = curr>val and prev<=val
+        elif "Crosses Below" in cnd: triggered = curr<val and prev>=val
+        sig = "BUY" if "Above" in cnd else "SELL"
+        return triggered, sig, f"RSI({p})={round(float(curr),2)} {cnd.replace('Value',str(val))}", result_vals
+
+    elif ind_c == "RSI + EMA Cross":
+        p    = int(params_c.get("rsi_period",14))
+        ema_type = params_c.get("ema_type","RSI crossed above EMA(9)")
+        rsi_arr = compute_rsi(prices_c, p)
+        if "ALL" in ema_type:
+            ema9  = compute_ema(rsi_arr, 9)
+            ema21 = compute_ema(rsi_arr, 21)
+            ema50 = compute_ema(rsi_arr, 50)
+            is_above = "above" in ema_type
+            cross9  = any(rsi_arr[j]>ema9[j]  and rsi_arr[j-1]<=ema9[j-1]  for j in range(max(1,n_c-5),n_c))
+            cross21 = any(rsi_arr[j]>ema21[j] and rsi_arr[j-1]<=ema21[j-1] for j in range(max(1,n_c-5),n_c))
+            cross50 = any(rsi_arr[j]>ema50[j] and rsi_arr[j-1]<=ema50[j-1] for j in range(max(1,n_c-5),n_c))
+            if is_above:
+                triggered = cross9 and cross21 and cross50 and ema9[-1]<40 and ema21[-1]<40 and ema50[-1]<40 and rsi_arr[-1]>40
+            else:
+                cross9b  = any(rsi_arr[j]<ema9[j]  and rsi_arr[j-1]>=ema9[j-1]  for j in range(max(1,n_c-5),n_c))
+                cross21b = any(rsi_arr[j]<ema21[j] and rsi_arr[j-1]>=ema21[j-1] for j in range(max(1,n_c-5),n_c))
+                cross50b = any(rsi_arr[j]<ema50[j] and rsi_arr[j-1]>=ema50[j-1] for j in range(max(1,n_c-5),n_c))
+                triggered = cross9b and cross21b and cross50b and ema9[-1]>60 and ema21[-1]>60 and ema50[-1]>60 and rsi_arr[-1]<60
+            sig = "BUY" if is_above else "SELL"
+            result_vals = {f"RSI({p})":round(float(rsi_arr[-1]),2),"EMA9":round(float(ema9[-1]),2),"EMA21":round(float(ema21[-1]),2),"EMA50":round(float(ema50[-1]),2)}
+        else:
+            ema_n = 9 if "(9)" in ema_type else 21 if "(21)" in ema_type else 50
+            ema_arr = compute_ema(rsi_arr, ema_n)
+            is_above = "above" in ema_type
+            triggered = any((rsi_arr[j]>ema_arr[j] if is_above else rsi_arr[j]<ema_arr[j]) and
+                             (rsi_arr[j-1]<=ema_arr[j-1] if is_above else rsi_arr[j-1]>=ema_arr[j-1])
+                             for j in range(max(1,n_c-5),n_c))
+            sig = "BUY" if is_above else "SELL"
+            result_vals = {f"RSI({p})":round(float(rsi_arr[-1]),2),f"EMA({ema_n})":round(float(ema_arr[-1]),2)}
+        return triggered, sig, f"RSI({p}) {ema_type}", result_vals
+
+    elif ind_c == "EMA Cross":
+        ef = int(params_c.get("ema_fast",9)); es = int(params_c.get("ema_slow",21))
+        ef_arr = compute_ema(prices_c, ef); es_arr = compute_ema(prices_c, es)
+        is_above = buy_c
+        triggered = (ef_arr[-1]>es_arr[-1] and ef_arr[-2]<=es_arr[-2]) if is_above else (ef_arr[-1]<es_arr[-1] and ef_arr[-2]>=es_arr[-2])
+        result_vals = {f"EMA({ef})":round(float(ef_arr[-1]),2),f"EMA({es})":round(float(es_arr[-1]),2)}
+        return triggered, "BUY" if is_above else "SELL", f"EMA({ef}) crossed {'above' if is_above else 'below'} EMA({es})", result_vals
+
+    elif ind_c == "SMA Cross":
+        sf = int(params_c.get("sma_fast",20)); ss = int(params_c.get("sma_slow",50))
+        sf_arr = compute_sma(prices_c, sf); ss_arr = compute_sma(prices_c, ss)
+        is_above = buy_c
+        triggered = (sf_arr[-1]>ss_arr[-1] and sf_arr[-2]<=ss_arr[-2]) if is_above else (sf_arr[-1]<ss_arr[-1] and sf_arr[-2]>=ss_arr[-2])
+        result_vals = {f"SMA({sf})":round(float(sf_arr[-1]),2),f"SMA({ss})":round(float(ss_arr[-1]),2)}
+        return triggered, "BUY" if is_above else "SELL", f"SMA({sf}) crossed {'above' if is_above else 'below'} SMA({ss})", result_vals
+
+    elif ind_c == "Supertrend":
+        p = int(params_c.get("st_period",7)); m = float(params_c.get("st_mult",2.0))
+        _, direction = compute_supertrend(high_c, low_c, prices_c, p, m)
+        is_bull = buy_c
+        triggered = (direction[-1]==1 and direction[-2]==-1) if is_bull else (direction[-1]==-1 and direction[-2]==1)
+        result_vals = {"Supertrend":"Bullish 📈" if direction[-1]==1 else "Bearish 📉"}
+        return triggered, "BUY" if is_bull else "SELL", f"Supertrend({p},{m}) turned {'Bullish' if is_bull else 'Bearish'}", result_vals
+
+    elif ind_c == "MACD":
+        mf = int(params_c.get("macd_fast",12)); ms = int(params_c.get("macd_slow",26)); msig = int(params_c.get("macd_signal",9))
+        mcond = params_c.get("macd_cond","MACD crosses ABOVE Signal (BUY)")
+        ema_f = compute_ema(prices_c, mf); ema_s = compute_ema(prices_c, ms)
+        macd_line = ema_f - ema_s
+        sig_line  = compute_ema(macd_line, msig)
+        hist      = macd_line - sig_line
+        triggered = False
+        if "ABOVE" in mcond: triggered = macd_line[-1]>sig_line[-1] and macd_line[-2]<=sig_line[-2]
+        elif "BELOW" in mcond: triggered = macd_line[-1]<sig_line[-1] and macd_line[-2]>=sig_line[-2]
+        elif "> 0" in mcond: triggered = macd_line[-1]>0
+        elif "< 0" in mcond: triggered = macd_line[-1]<0
+        result_vals = {"MACD":round(float(macd_line[-1]),4),"Signal":round(float(sig_line[-1]),4),"Hist":round(float(hist[-1]),4)}
+        sig_type = "BUY" if "ABOVE" in mcond or "> 0" in mcond else "SELL"
+        return triggered, sig_type, f"MACD({mf},{ms},{msig}) {mcond.split('(')[0].strip()}", result_vals
+
+    elif ind_c == "CCI":
+        p = int(params_c.get("cci_period",20)); cnd = params_c.get("cci_condition","CCI > Value"); val = float(params_c.get("cci_value",200))
+        cci_arr = compute_cci(high_c, low_c, prices_c, p)
+        curr = cci_arr[-1]; prev = cci_arr[-2] if n_c>1 else curr
+        result_vals = {f"CCI({p})":round(float(curr),2)}
+        if ">" in cnd and "Crosses" not in cnd: triggered = curr>val
+        elif "<" in cnd and "Crosses" not in cnd: triggered = curr<val
+        elif "Above" in cnd: triggered = curr>val and prev<=val
+        elif "Below" in cnd: triggered = curr<val and prev>=val
+        else: triggered = False
+        return triggered, "BUY" if ">" in cnd or "Above" in cnd else "SELL", f"CCI({p})={round(float(curr),2)} {cnd.replace('Value',str(val))}", result_vals
+
+    elif ind_c == "MFI":
+        p = int(params_c.get("mfi_period",14)); cnd = params_c.get("mfi_condition","MFI > Value (Above)"); val = float(params_c.get("mfi_value",50))
+        mfi_arr = compute_mfi(high_c, low_c, prices_c, vol_c, p)
+        curr = mfi_arr[-1]; prev = mfi_arr[-2] if n_c>1 else curr
+        result_vals = {f"MFI({p})":round(float(curr),2)}
+        if "Above" in cnd and "Crosses" not in cnd: triggered = curr>val
+        elif "Below" in cnd and "Crosses" not in cnd: triggered = curr<val
+        elif "Crosses Above" in cnd: triggered = curr>val and prev<=val
+        elif "Crosses Below" in cnd: triggered = curr<val and prev>=val
+        else: triggered = False
+        return triggered, "BUY" if ">" in cnd or "Above" in cnd else "SELL", f"MFI({p})={round(float(curr),2)} {cnd.replace('Value',str(val))}", result_vals
+
+    elif ind_c == "Stochastic":
+        p = int(params_c.get("stoch_period",14)); cnd = params_c.get("stoch_cond","%K > Value"); val = float(params_c.get("stoch_value",50))
+        fk,fd,sk,sd = compute_fast_slow_stoch(high_c, low_c, prices_c, p)
+        curr = fk[-1]; prev = fk[-2] if n_c>1 else curr
+        result_vals = {f"Stoch %K":round(float(curr),2),f"Stoch %D":round(float(fd[-1]),2)}
+        if "%K > Value" in cnd: triggered = curr>val
+        elif "%K < Value" in cnd: triggered = curr<val
+        elif "Above %D" in cnd: triggered = fk[-1]>fd[-1] and fk[-2]<=fd[-2]
+        elif "Below %D" in cnd: triggered = fk[-1]<fd[-1] and fk[-2]>=fd[-2]
+        elif "Crosses Above Value" in cnd: triggered = curr>val and prev<=val
+        elif "Crosses Below Value" in cnd: triggered = curr<val and prev>=val
+        else: triggered = False
+        return triggered, "BUY" if ">" in cnd or "Above" in cnd else "SELL", f"Stoch({p}) {cnd.replace('Value',str(val))}", result_vals
+
+    return False, "", "", {}
+
+
+def run_background_auto_scan():
+    """Check all active saved alerts and send Telegram notifications.
+    Runs once per real visit, throttled to avoid spamming on every refresh."""
+    import time as _time
+
+    # Throttle: only run once every 4 minutes per app instance
+    last_run = load_persistent("last_auto_scan_time", 0)
+    now_ts   = _time.time()
+    if now_ts - last_run < 240:  # 4 min cooldown
+        return
+
+    save_persistent("last_auto_scan_time", now_ts)
+
+    tok = str(st.session_state.get("tg_token", "")).strip()
+    cid = str(st.session_state.get("tg_chat_id", "")).strip()
+    if not (tok and cid and len(tok) > 10):
+        return
+
+    active_alerts = {k: v for k, v in st.session_state.get("saved_alerts", {}).items()
+                      if v.get("active", True)}
+    if not active_alerts:
+        return
+
+    for al_name, al_cfg in active_alerts.items():
+        syms = al_cfg.get("symbols", [])
+        tfs  = al_cfg.get("tf_list", [])
+        if not syms or not tfs:
+            continue
+
+        for tf_bg in tfs:
+            if tf_bg not in TIMEFRAMES:
+                continue
+            iv_bg, per_bg = TIMEFRAMES[tf_bg]
+
+            for sym_bg in syms[:50]:  # safety cap per alert
+                try:
+                    df_bg = fetch_data(sym_bg, iv_bg, per_bg)
+                    if df_bg.empty or len(df_bg) < 50:
+                        continue
+
+                    triggered_bg, sig_bg, cond_str_bg, vals_bg = check_indicator_condition(df_bg, al_cfg)
+                    if triggered_bg:
+                        price_bg = round(float(df_bg["Close"].iloc[-1]), 2)
+                        ts_bg    = str(df_bg.index[-1])[:16]
+                        vals_str_bg = " | ".join([f"{k}={v}" for k, v in vals_bg.items()])
+                        icon_bg = "📈" if sig_bg == "BUY" else "📉"
+                        sig_icon_bg = "✅" if sig_bg == "BUY" else "🔴"
+                        msg_bg = (
+                            f"{icon_bg} <b>NW Band Scanner — AUTO</b>\n"
+                            f"━━━━━━━━━━━━━\n"
+                            f"{sig_icon_bg} <b>{sig_bg} SIGNAL</b>\n"
+                            f"🏷 Alert: {al_name}\n"
+                            f"📌 Symbol: {sym_bg}\n"
+                            f"⏱ Timeframe: {tf_bg}\n"
+                            f"🎯 Condition: {cond_str_bg}\n"
+                            f"📊 Values: {vals_str_bg}\n"
+                            f"💰 Price: ₹{price_bg:,}\n"
+                            f"🕐 Time: {ts_bg}\n"
+                            f"━━━━━━━━━━━━━"
+                        )
+                        requests.post(
+                            f"https://api.telegram.org/bot{tok}/sendMessage",
+                            json={"chat_id": cid, "text": msg_bg, "parse_mode": "HTML"},
+                            timeout=10
+                        )
+                except Exception:
+                    continue  # skip failed symbol, keep scanning others
+
+# (trigger moved below fetch_data definition)
+
+# ─────────────────────────────────────────────────────────────────
 # CUSTOM CSS  (dark trading terminal feel)
 # ─────────────────────────────────────────────────────────────────
 st.markdown("""
@@ -544,6 +877,8 @@ def fetch_data(symbol: str, interval: str, period: str) -> pd.DataFrame:
         return df
     except Exception as e:
         return pd.DataFrame()
+
+# (background scan trigger moved to after sidebar — needs bandwidth/mult/lookback/indicator_choice)
 
 # ─────────────────────────────────────────────────────────────────
 # BACKTEST ENGINE
@@ -1621,6 +1956,18 @@ with st.sidebar:
     )
     scan_tf = st.selectbox("Scanner Timeframe", list(TIMEFRAMES.keys()), index=5, key='scan_tf')
     auto_refresh = st.checkbox("🔄 Auto-refresh (60s)", value=False)
+
+# ─────────────────────────────────────────────────────────────────
+# TRIGGER BACKGROUND AUTO-SCAN
+# All dependencies (bandwidth, mult, lookback, indicator_choice,
+# compute_indicator, fetch_data, TIMEFRAMES) are now defined.
+# Throttled internally to once per 4 minutes per app instance.
+# Triggered every time someone (or UptimeRobot) loads this page.
+# ─────────────────────────────────────────────────────────────────
+try:
+    run_background_auto_scan()
+except Exception:
+    pass
 
 # ─────────────────────────────────────────────────────────────────
 # HEADER
@@ -2784,162 +3131,7 @@ with tab_alerts:
             return r.status_code==200, r.json().get("description","") if r.status_code!=200 else "OK"
         except Exception as ex: return False, str(ex)
 
-    def check_indicator_condition(df_c, al_cfg_c):
-        """Check if technical indicator condition is met for last bar"""
-        ind_c    = al_cfg_c.get("indicator_used","NW Envelope / Bollinger Bands (Band Touch)")
-        params_c = al_cfg_c.get("ind_params",{})
-        buy_c    = al_cfg_c.get("buy", True)
-        sell_c   = al_cfg_c.get("sell", False)
-        prices_c = df_c["Close"].values.flatten().astype(float)
-        high_c   = df_c["High"].values.flatten().astype(float) if "High" in df_c.columns else prices_c
-        low_c    = df_c["Low"].values.flatten().astype(float)  if "Low"  in df_c.columns else prices_c
-        vol_c    = df_c["Volume"].values.flatten().astype(float) if "Volume" in df_c.columns else np.ones(len(prices_c))
-        n_c      = len(prices_c)
-        if n_c < 10: return False, "BUY", "Not enough data", {}
-
-        result_vals = {}
-
-        if "NW Envelope" in ind_c or "Bollinger" in ind_c:
-            _, up_c, lo_c = compute_indicator(prices_c, indicator_choice, bandwidth, mult, min(lookback, n_c-1))
-            price_last = prices_c[-1]
-            up_last    = up_c[-1] if not np.isnan(up_c[-1]) else 0
-            lo_last    = lo_c[-1] if not np.isnan(lo_c[-1]) else 0
-            dist_up = round((up_last-price_last)/price_last*100,2) if up_last else 999
-            dist_lo = round((price_last-lo_last)/price_last*100,2) if lo_last else 999
-            near_up = dist_up<=0.5 or price_last>=up_last
-            near_lo = dist_lo<=0.5 or price_last<=lo_last
-            result_vals = {"Price": round(price_last,2), "Upper": round(up_last,2), "Lower": round(lo_last,2)}
-            if near_up and sell_c: return True, "SELL", f"Upper Band Touch ({dist_up}%)", result_vals
-            if near_lo and buy_c:  return True, "BUY",  f"Lower Band Touch ({dist_lo}%)", result_vals
-            return False, "", "", result_vals
-
-        elif ind_c == "RSI":
-            p   = int(params_c.get("rsi_period",14))
-            cnd = params_c.get("rsi_condition","RSI > Value (Above)")
-            val = float(params_c.get("rsi_value",60))
-            rsi_arr = compute_rsi(prices_c, p)
-            curr = rsi_arr[-1]; prev = rsi_arr[-2] if n_c>1 else curr
-            result_vals = {f"RSI({p})": round(float(curr),2), "Value": val}
-            triggered = False
-            if "Above" in cnd and "Crosses" not in cnd: triggered = curr > val
-            elif "Below" in cnd and "Crosses" not in cnd: triggered = curr < val
-            elif "Crosses Above" in cnd: triggered = curr>val and prev<=val
-            elif "Crosses Below" in cnd: triggered = curr<val and prev>=val
-            sig = "BUY" if "Above" in cnd else "SELL"
-            return triggered, sig, f"RSI({p})={round(float(curr),2)} {cnd.replace('Value',str(val))}", result_vals
-
-        elif ind_c == "RSI + EMA Cross":
-            p    = int(params_c.get("rsi_period",14))
-            ema_type = params_c.get("ema_type","RSI crossed above EMA(9)")
-            rsi_arr = compute_rsi(prices_c, p)
-            if "ALL" in ema_type:
-                ema9  = compute_ema(rsi_arr, 9)
-                ema21 = compute_ema(rsi_arr, 21)
-                ema50 = compute_ema(rsi_arr, 50)
-                is_above = "above" in ema_type
-                cross9  = any(rsi_arr[j]>ema9[j]  and rsi_arr[j-1]<=ema9[j-1]  for j in range(max(1,n_c-5),n_c))
-                cross21 = any(rsi_arr[j]>ema21[j] and rsi_arr[j-1]<=ema21[j-1] for j in range(max(1,n_c-5),n_c))
-                cross50 = any(rsi_arr[j]>ema50[j] and rsi_arr[j-1]<=ema50[j-1] for j in range(max(1,n_c-5),n_c))
-                if is_above:
-                    triggered = cross9 and cross21 and cross50 and ema9[-1]<40 and ema21[-1]<40 and ema50[-1]<40 and rsi_arr[-1]>40
-                else:
-                    cross9b  = any(rsi_arr[j]<ema9[j]  and rsi_arr[j-1]>=ema9[j-1]  for j in range(max(1,n_c-5),n_c))
-                    cross21b = any(rsi_arr[j]<ema21[j] and rsi_arr[j-1]>=ema21[j-1] for j in range(max(1,n_c-5),n_c))
-                    cross50b = any(rsi_arr[j]<ema50[j] and rsi_arr[j-1]>=ema50[j-1] for j in range(max(1,n_c-5),n_c))
-                    triggered = cross9b and cross21b and cross50b and ema9[-1]>60 and ema21[-1]>60 and ema50[-1]>60 and rsi_arr[-1]<60
-                sig = "BUY" if is_above else "SELL"
-                result_vals = {f"RSI({p})":round(float(rsi_arr[-1]),2),"EMA9":round(float(ema9[-1]),2),"EMA21":round(float(ema21[-1]),2),"EMA50":round(float(ema50[-1]),2)}
-            else:
-                ema_n = 9 if "(9)" in ema_type else 21 if "(21)" in ema_type else 50
-                ema_arr = compute_ema(rsi_arr, ema_n)
-                is_above = "above" in ema_type
-                triggered = any((rsi_arr[j]>ema_arr[j] if is_above else rsi_arr[j]<ema_arr[j]) and
-                                 (rsi_arr[j-1]<=ema_arr[j-1] if is_above else rsi_arr[j-1]>=ema_arr[j-1])
-                                 for j in range(max(1,n_c-5),n_c))
-                sig = "BUY" if is_above else "SELL"
-                result_vals = {f"RSI({p})":round(float(rsi_arr[-1]),2),f"EMA({ema_n})":round(float(ema_arr[-1]),2)}
-            return triggered, sig, f"RSI({p}) {ema_type}", result_vals
-
-        elif ind_c == "EMA Cross":
-            ef = int(params_c.get("ema_fast",9)); es = int(params_c.get("ema_slow",21))
-            ef_arr = compute_ema(prices_c, ef); es_arr = compute_ema(prices_c, es)
-            is_above = buy_c
-            triggered = (ef_arr[-1]>es_arr[-1] and ef_arr[-2]<=es_arr[-2]) if is_above else (ef_arr[-1]<es_arr[-1] and ef_arr[-2]>=es_arr[-2])
-            result_vals = {f"EMA({ef})":round(float(ef_arr[-1]),2),f"EMA({es})":round(float(es_arr[-1]),2)}
-            return triggered, "BUY" if is_above else "SELL", f"EMA({ef}) crossed {'above' if is_above else 'below'} EMA({es})", result_vals
-
-        elif ind_c == "SMA Cross":
-            sf = int(params_c.get("sma_fast",20)); ss = int(params_c.get("sma_slow",50))
-            sf_arr = compute_sma(prices_c, sf); ss_arr = compute_sma(prices_c, ss)
-            is_above = buy_c
-            triggered = (sf_arr[-1]>ss_arr[-1] and sf_arr[-2]<=ss_arr[-2]) if is_above else (sf_arr[-1]<ss_arr[-1] and sf_arr[-2]>=ss_arr[-2])
-            result_vals = {f"SMA({sf})":round(float(sf_arr[-1]),2),f"SMA({ss})":round(float(ss_arr[-1]),2)}
-            return triggered, "BUY" if is_above else "SELL", f"SMA({sf}) crossed {'above' if is_above else 'below'} SMA({ss})", result_vals
-
-        elif ind_c == "Supertrend":
-            p = int(params_c.get("st_period",7)); m = float(params_c.get("st_mult",2.0))
-            _, direction = compute_supertrend(high_c, low_c, prices_c, p, m)
-            is_bull = buy_c
-            triggered = (direction[-1]==1 and direction[-2]==-1) if is_bull else (direction[-1]==-1 and direction[-2]==1)
-            result_vals = {"Supertrend":"Bullish 📈" if direction[-1]==1 else "Bearish 📉"}
-            return triggered, "BUY" if is_bull else "SELL", f"Supertrend({p},{m}) turned {'Bullish' if is_bull else 'Bearish'}", result_vals
-
-        elif ind_c == "MACD":
-            mf = int(params_c.get("macd_fast",12)); ms = int(params_c.get("macd_slow",26)); msig = int(params_c.get("macd_signal",9))
-            mcond = params_c.get("macd_cond","MACD crosses ABOVE Signal (BUY)")
-            ema_f = compute_ema(prices_c, mf); ema_s = compute_ema(prices_c, ms)
-            macd_line = ema_f - ema_s
-            sig_line  = compute_ema(macd_line, msig)
-            hist      = macd_line - sig_line
-            triggered = False
-            if "ABOVE" in mcond: triggered = macd_line[-1]>sig_line[-1] and macd_line[-2]<=sig_line[-2]
-            elif "BELOW" in mcond: triggered = macd_line[-1]<sig_line[-1] and macd_line[-2]>=sig_line[-2]
-            elif "> 0" in mcond: triggered = macd_line[-1]>0
-            elif "< 0" in mcond: triggered = macd_line[-1]<0
-            result_vals = {"MACD":round(float(macd_line[-1]),4),"Signal":round(float(sig_line[-1]),4),"Hist":round(float(hist[-1]),4)}
-            sig_type = "BUY" if "ABOVE" in mcond or "> 0" in mcond else "SELL"
-            return triggered, sig_type, f"MACD({mf},{ms},{msig}) {mcond.split('(')[0].strip()}", result_vals
-
-        elif ind_c == "CCI":
-            p = int(params_c.get("cci_period",20)); cnd = params_c.get("cci_condition","CCI > Value"); val = float(params_c.get("cci_value",200))
-            cci_arr = compute_cci(high_c, low_c, prices_c, p)
-            curr = cci_arr[-1]; prev = cci_arr[-2] if n_c>1 else curr
-            result_vals = {f"CCI({p})":round(float(curr),2)}
-            if ">" in cnd and "Crosses" not in cnd: triggered = curr>val
-            elif "<" in cnd and "Crosses" not in cnd: triggered = curr<val
-            elif "Above" in cnd: triggered = curr>val and prev<=val
-            elif "Below" in cnd: triggered = curr<val and prev>=val
-            else: triggered = False
-            return triggered, "BUY" if ">" in cnd or "Above" in cnd else "SELL", f"CCI({p})={round(float(curr),2)} {cnd.replace('Value',str(val))}", result_vals
-
-        elif ind_c == "MFI":
-            p = int(params_c.get("mfi_period",14)); cnd = params_c.get("mfi_condition","MFI > Value (Above)"); val = float(params_c.get("mfi_value",50))
-            mfi_arr = compute_mfi(high_c, low_c, prices_c, vol_c, p)
-            curr = mfi_arr[-1]; prev = mfi_arr[-2] if n_c>1 else curr
-            result_vals = {f"MFI({p})":round(float(curr),2)}
-            if "Above" in cnd and "Crosses" not in cnd: triggered = curr>val
-            elif "Below" in cnd and "Crosses" not in cnd: triggered = curr<val
-            elif "Crosses Above" in cnd: triggered = curr>val and prev<=val
-            elif "Crosses Below" in cnd: triggered = curr<val and prev>=val
-            else: triggered = False
-            return triggered, "BUY" if ">" in cnd or "Above" in cnd else "SELL", f"MFI({p})={round(float(curr),2)} {cnd.replace('Value',str(val))}", result_vals
-
-        elif ind_c == "Stochastic":
-            p = int(params_c.get("stoch_period",14)); cnd = params_c.get("stoch_cond","%K > Value"); val = float(params_c.get("stoch_value",50))
-            fk,fd,sk,sd = compute_fast_slow_stoch(high_c, low_c, prices_c, p)
-            curr = fk[-1]; prev = fk[-2] if n_c>1 else curr
-            result_vals = {f"Stoch %K":round(float(curr),2),f"Stoch %D":round(float(fd[-1]),2)}
-            if "%K > Value" in cnd: triggered = curr>val
-            elif "%K < Value" in cnd: triggered = curr<val
-            elif "Above %D" in cnd: triggered = fk[-1]>fd[-1] and fk[-2]<=fd[-2]
-            elif "Below %D" in cnd: triggered = fk[-1]<fd[-1] and fk[-2]>=fd[-2]
-            elif "Crosses Above Value" in cnd: triggered = curr>val and prev<=val
-            elif "Crosses Below Value" in cnd: triggered = curr<val and prev>=val
-            else: triggered = False
-            return triggered, "BUY" if ">" in cnd or "Above" in cnd else "SELL", f"Stoch({p}) {cnd.replace('Value',str(val))}", result_vals
-
-        return False, "", "", {}
-
+    # check_indicator_condition is now defined globally (see top of file)
     def run_saved_alert(al_name_r, al_cfg_r):
         found_r = []
         syms_r  = al_cfg_r.get("symbols",[])
@@ -3336,104 +3528,7 @@ with tab_screener:
     st.markdown("Chartink jaise filters lagao — RSI, Supertrend, CCI, MFI, Stochastic, Ichimoku, High/Low patterns")
 
     # ── Technical Indicator Functions ────────────
-    def compute_rsi(prices, period=14):
-        s = pd.Series(prices)
-        delta = s.diff()
-        gain = delta.where(delta>0, 0.0)
-        loss = -delta.where(delta<0, 0.0)
-        avg_gain = gain.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
-        avg_loss = loss.ewm(alpha=1/period, min_periods=period, adjust=False).mean()
-        rs = avg_gain / avg_loss.replace(0, np.nan)
-        rsi = 100 - (100/(1+rs))
-        return rsi.values
-
-    def compute_stoch_rsi(prices, period=14, smooth_k=3, smooth_d=3):
-        rsi = pd.Series(compute_rsi(prices, period))
-        rsi_min = rsi.rolling(period).min()
-        rsi_max = rsi.rolling(period).max()
-        stoch_rsi = (rsi - rsi_min) / (rsi_max - rsi_min + 1e-10) * 100
-        k = stoch_rsi.rolling(smooth_k).mean()
-        d = k.rolling(smooth_d).mean()
-        return k.values, d.values
-
-    def compute_cci(high, low, close, period=20):
-        tp = (high + low + close) / 3
-        s = pd.Series(tp)
-        ma = s.rolling(period).mean()
-        mad = s.rolling(period).apply(lambda x: np.mean(np.abs(x - x.mean())), raw=True)
-        cci = (s - ma) / (0.015 * mad)
-        return cci.values
-
-    def compute_mfi(high, low, close, volume, period=14):
-        tp   = (high + low + close) / 3
-        rmf  = tp * volume
-        df_  = pd.DataFrame({'tp': tp, 'rmf': rmf})
-        pos  = df_['rmf'].where(df_['tp'] > df_['tp'].shift(1), 0)
-        neg  = df_['rmf'].where(df_['tp'] < df_['tp'].shift(1), 0)
-        pmf  = pos.rolling(period).sum()
-        nmf  = neg.rolling(period).sum()
-        mfr  = pmf / nmf.replace(0, np.nan)
-        mfi  = 100 - (100/(1+mfr))
-        return mfi.values
-
-    def compute_supertrend(high, low, close, period=7, multiplier=2.0):
-        hl2   = (high + low) / 2
-        s_h   = pd.Series(high); s_l = pd.Series(low); s_c = pd.Series(close)
-        atr_s = (s_h - s_l).rolling(period).mean()
-        upper = hl2 + multiplier * atr_s
-        lower = hl2 - multiplier * atr_s
-        n = len(close)
-        supertrend = np.full(n, np.nan)
-        direction  = np.full(n, 1)  # 1=bullish, -1=bearish
-        for i in range(1, n):
-            if np.isnan(upper.iloc[i]) or np.isnan(lower.iloc[i]):
-                continue
-            # Upper band
-            if upper.iloc[i] < upper.iloc[i-1] or close[i-1] > upper.iloc[i-1]:
-                up = upper.iloc[i]
-            else:
-                up = upper.iloc[i-1]
-            # Lower band
-            if lower.iloc[i] > lower.iloc[i-1] or close[i-1] < lower.iloc[i-1]:
-                lo = lower.iloc[i]
-            else:
-                lo = lower.iloc[i-1]
-            upper.iloc[i] = up
-            lower.iloc[i] = lo
-            if direction[i-1] == -1 and close[i] > up:
-                direction[i] = 1
-            elif direction[i-1] == 1 and close[i] < lo:
-                direction[i] = -1
-            else:
-                direction[i] = direction[i-1]
-            supertrend[i] = lo if direction[i] == 1 else up
-        return supertrend, direction
-
-    def compute_ichimoku(high, low, close):
-        h = pd.Series(high); l = pd.Series(low)
-        tenkan  = (h.rolling(9).max()  + l.rolling(9).min())  / 2
-        kijun   = (h.rolling(26).max() + l.rolling(26).min()) / 2
-        senkou_a = ((tenkan + kijun) / 2).shift(26)
-        senkou_b = ((h.rolling(52).max() + l.rolling(52).min()) / 2).shift(26)
-        chikou   = pd.Series(close).shift(-26)
-        return tenkan.values, kijun.values, senkou_a.values, senkou_b.values, chikou.values
-
-    def compute_fast_slow_stoch(high, low, close, k_period=14, d_period=3, slowing=3):
-        h = pd.Series(high); l = pd.Series(low); c = pd.Series(close)
-        lowest_low   = l.rolling(k_period).min()
-        highest_high = h.rolling(k_period).max()
-        fast_k = (c - lowest_low) / (highest_high - lowest_low + 1e-10) * 100
-        slow_k = fast_k.rolling(slowing).mean()
-        slow_d = slow_k.rolling(d_period).mean()
-        fast_d = fast_k.rolling(d_period).mean()
-        return fast_k.values, fast_d.values, slow_k.values, slow_d.values
-
-    def compute_sma(prices, period):
-        return pd.Series(prices).rolling(period).mean().values
-
-    def compute_ema(prices, period):
-        return pd.Series(prices).ewm(span=period, adjust=False).mean().values
-
+    # Indicator functions now defined globally (see top of file)
     # ─────────────────────────────────────────────
     # SCREEN BUILDER UI
     # ─────────────────────────────────────────────
