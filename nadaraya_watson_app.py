@@ -424,31 +424,50 @@ def check_indicator_condition(df_c, al_cfg_c):
 
 
 def run_background_auto_scan():
-    """Check all active saved alerts and send Telegram notifications.
-    Runs once per real visit, throttled to avoid spamming on every refresh."""
+    """
+    Background auto-scanner — completely independent of session state.
+    Loads everything from persistent file storage directly.
+    Called on every page load (throttled to 4 min intervals).
+    """
     import time as _time
 
-    # Throttle: only run once every 4 minutes per app instance
+    # ── Step 1: Throttle check ────────────────────
     last_run = load_persistent("last_auto_scan_time", 0)
     now_ts   = _time.time()
-    if now_ts - last_run < 240:  # 4 min cooldown
+    if now_ts - float(last_run) < 240:  # 4 min cooldown
         return
-
     save_persistent("last_auto_scan_time", now_ts)
 
-    tok = str(st.session_state.get("tg_token", "")).strip()
-    cid = str(st.session_state.get("tg_chat_id", "")).strip()
-    if not (tok and cid and len(tok) > 10):
+    # ── Step 2: Load Telegram credentials from file/secrets ──
+    tok = str(_PRESET_TOKEN or load_persistent("tg_token", "")).strip()
+    cid = str(_PRESET_CHAT_ID or load_persistent("tg_chat_id", "")).strip()
+    if not tok or not cid or len(tok) < 10:
+        return  # No telegram configured
+
+    # ── Step 3: Load saved alerts from persistent file ────────
+    saved_alerts = load_persistent("saved_alerts", {})
+    if not saved_alerts:
+        # Also try session state as fallback
+        saved_alerts = st.session_state.get("saved_alerts", {})
+    if not saved_alerts:
         return
 
-    active_alerts = {k: v for k, v in st.session_state.get("saved_alerts", {}).items()
-                      if v.get("active", True)}
+    active_alerts = {k: v for k, v in saved_alerts.items()
+                     if v.get("active", True)}
     if not active_alerts:
         return
 
+    # ── Step 4: Default NW params (fallback if sidebar not loaded) ──
+    _bandwidth = 8.0
+    _mult      = 3.5
+    _lookback  = 200
+    _indicator = "NW Envelope (Nadaraya-Watson)"
+
+    # ── Step 5: Scan each alert ───────────────────
     for al_name, al_cfg in active_alerts.items():
         syms = al_cfg.get("symbols", [])
         tfs  = al_cfg.get("tf_list", [])
+        ind  = al_cfg.get("indicator_used", _indicator)
         if not syms or not tfs:
             continue
 
@@ -457,39 +476,169 @@ def run_background_auto_scan():
                 continue
             iv_bg, per_bg = TIMEFRAMES[tf_bg]
 
-            for sym_bg in syms[:50]:  # safety cap per alert
+            for sym_bg in syms[:30]:  # safety cap
                 try:
                     df_bg = fetch_data(sym_bg, iv_bg, per_bg)
                     if df_bg.empty or len(df_bg) < 50:
                         continue
 
-                    triggered_bg, sig_bg, cond_str_bg, vals_bg = check_indicator_condition(df_bg, al_cfg)
-                    if triggered_bg:
-                        price_bg = round(float(df_bg["Close"].iloc[-1]), 2)
-                        ts_bg    = str(df_bg.index[-1])[:16]
-                        vals_str_bg = " | ".join([f"{k}={v}" for k, v in vals_bg.items()])
-                        icon_bg = "📈" if sig_bg == "BUY" else "📉"
-                        sig_icon_bg = "✅" if sig_bg == "BUY" else "🔴"
+                    prices_bg = df_bg["Close"].values.flatten().astype(float)
+                    high_bg   = df_bg["High"].values.flatten().astype(float) if "High" in df_bg.columns else prices_bg
+                    low_bg    = df_bg["Low"].values.flatten().astype(float)  if "Low"  in df_bg.columns else prices_bg
+                    vol_bg    = df_bg["Volume"].values.flatten().astype(float) if "Volume" in df_bg.columns else np.ones(len(prices_bg))
+                    n_bg      = len(prices_bg)
+                    if n_bg < 10:
+                        continue
+
+                    buy_bg  = al_cfg.get("buy",  True)
+                    sell_bg = al_cfg.get("sell", False)
+                    params  = al_cfg.get("ind_params", {})
+                    triggered_bg = False
+                    sig_bg       = ""
+                    cond_str_bg  = al_cfg.get("condition_desc", "Band Touch")
+                    vals_str_bg  = ""
+
+                    # ── Evaluate condition ────────────────
+                    if "NW" in ind or "Bollinger" in ind or "Band" in ind:
+                        # NW Envelope / Bollinger Bands
+                        lb_bg = min(_lookback, n_bg - 1)
+                        _, up_bg, lo_bg = compute_indicator(prices_bg, _indicator, _bandwidth, _mult, lb_bg)
+                        price_last = prices_bg[-1]
+                        up_last    = float(up_bg[-1]) if not np.isnan(up_bg[-1]) else 0
+                        lo_last    = float(lo_bg[-1]) if not np.isnan(lo_bg[-1]) else 0
+                        dist_up = round((up_last - price_last) / price_last * 100, 2) if up_last else 999
+                        dist_lo = round((price_last - lo_last) / price_last * 100, 2) if lo_last else 999
+                        near_up = dist_up <= 0.5 or price_last >= up_last
+                        near_lo = dist_lo <= 0.5 or price_last <= lo_last
+                        vals_str_bg = f"Upper={round(up_last,2)} Lower={round(lo_last,2)} Price={round(price_last,2)}"
+                        if near_up and sell_bg:
+                            triggered_bg = True; sig_bg = "SELL"
+                            cond_str_bg  = f"Upper Band Touch ({dist_up}%)"
+                        elif near_lo and buy_bg:
+                            triggered_bg = True; sig_bg = "BUY"
+                            cond_str_bg  = f"Lower Band Touch ({dist_lo}%)"
+
+                    elif ind == "RSI":
+                        p   = int(params.get("rsi_period", 14))
+                        cnd = params.get("rsi_condition", "RSI > Value (Above)")
+                        val = float(params.get("rsi_value", 60))
+                        rsi_arr = compute_rsi(prices_bg, p)
+                        curr = float(rsi_arr[-1]); prev = float(rsi_arr[-2]) if n_bg > 1 else curr
+                        vals_str_bg = f"RSI({p})={round(curr,2)}"
+                        if   "Above" in cnd and "Crosses" not in cnd: triggered_bg = curr > val
+                        elif "Below" in cnd and "Crosses" not in cnd: triggered_bg = curr < val
+                        elif "Crosses Above" in cnd: triggered_bg = curr > val and prev <= val
+                        elif "Crosses Below" in cnd: triggered_bg = curr < val and prev >= val
+                        sig_bg = "BUY" if buy_bg else "SELL"
+
+                    elif "RSI + EMA" in ind or "RSI-EMA" in ind:
+                        p  = int(params.get("rsi_period", 14))
+                        et = params.get("ema_type", "RSI crossed above EMA(9)")
+                        rsi_arr = compute_rsi(prices_bg, p)
+                        ema_n   = 9 if "(9)" in et else 21 if "(21)" in et else 50
+                        ema_arr = compute_ema(rsi_arr, ema_n)
+                        is_above = "above" in et.lower()
+                        triggered_bg = any(
+                            (rsi_arr[j] > ema_arr[j] if is_above else rsi_arr[j] < ema_arr[j]) and
+                            (rsi_arr[j-1] <= ema_arr[j-1] if is_above else rsi_arr[j-1] >= ema_arr[j-1])
+                            for j in range(max(1, n_bg-5), n_bg)
+                        )
+                        vals_str_bg = f"RSI({p})={round(float(rsi_arr[-1]),2)} EMA({ema_n})={round(float(ema_arr[-1]),2)}"
+                        sig_bg = "BUY" if is_above else "SELL"
+
+                    elif "EMA Cross" in ind:
+                        ef = int(params.get("ema_fast", 9)); es = int(params.get("ema_slow", 21))
+                        ef_arr = compute_ema(prices_bg, ef); es_arr = compute_ema(prices_bg, es)
+                        triggered_bg = (ef_arr[-1] > es_arr[-1] and ef_arr[-2] <= es_arr[-2]) if buy_bg \
+                                   else (ef_arr[-1] < es_arr[-1] and ef_arr[-2] >= es_arr[-2])
+                        vals_str_bg = f"EMA({ef})={round(float(ef_arr[-1]),2)} EMA({es})={round(float(es_arr[-1]),2)}"
+                        sig_bg = "BUY" if buy_bg else "SELL"
+
+                    elif "SMA Cross" in ind:
+                        sf = int(params.get("sma_fast", 20)); ss = int(params.get("sma_slow", 50))
+                        sf_arr = compute_sma(prices_bg, sf); ss_arr = compute_sma(prices_bg, ss)
+                        triggered_bg = (sf_arr[-1] > ss_arr[-1] and sf_arr[-2] <= ss_arr[-2]) if buy_bg \
+                                   else (sf_arr[-1] < ss_arr[-1] and sf_arr[-2] >= ss_arr[-2])
+                        vals_str_bg = f"SMA({sf})={round(float(sf_arr[-1]),2)} SMA({ss})={round(float(ss_arr[-1]),2)}"
+                        sig_bg = "BUY" if buy_bg else "SELL"
+
+                    elif "Supertrend" in ind:
+                        p = int(params.get("st_period", 7)); m = float(params.get("st_mult", 2.0))
+                        _, direction = compute_supertrend(high_bg, low_bg, prices_bg, p, m)
+                        triggered_bg = (direction[-1]==1 and direction[-2]==-1) if buy_bg \
+                                   else (direction[-1]==-1 and direction[-2]==1)
+                        vals_str_bg = f"Supertrend={'Bullish' if direction[-1]==1 else 'Bearish'}"
+                        sig_bg = "BUY" if buy_bg else "SELL"
+
+                    elif "MACD" in ind:
+                        mf = int(params.get("macd_fast",12)); ms = int(params.get("macd_slow",26))
+                        msig = int(params.get("macd_signal",9))
+                        mcnd = params.get("macd_cond","MACD crosses ABOVE Signal (BUY)")
+                        macd_line = compute_ema(prices_bg,mf) - compute_ema(prices_bg,ms)
+                        sig_line  = compute_ema(macd_line, msig)
+                        if   "ABOVE" in mcnd: triggered_bg = macd_line[-1]>sig_line[-1] and macd_line[-2]<=sig_line[-2]
+                        elif "BELOW" in mcnd: triggered_bg = macd_line[-1]<sig_line[-1] and macd_line[-2]>=sig_line[-2]
+                        elif "> 0"  in mcnd:  triggered_bg = macd_line[-1]>0
+                        elif "< 0"  in mcnd:  triggered_bg = macd_line[-1]<0
+                        vals_str_bg = f"MACD={round(float(macd_line[-1]),4)} Signal={round(float(sig_line[-1]),4)}"
+                        sig_bg = "BUY" if "ABOVE" in mcnd or "> 0" in mcnd else "SELL"
+
+                    elif "CCI" in ind:
+                        p   = int(params.get("cci_period",20))
+                        cnd = params.get("cci_condition","CCI > Value")
+                        val = float(params.get("cci_value",200))
+                        cci_arr = compute_cci(high_bg, low_bg, prices_bg, p)
+                        curr = float(cci_arr[-1]); prev = float(cci_arr[-2]) if n_bg>1 else curr
+                        if   ">" in cnd and "Crosses" not in cnd: triggered_bg = curr > val
+                        elif "<" in cnd and "Crosses" not in cnd: triggered_bg = curr < val
+                        elif "Above" in cnd: triggered_bg = curr>val and prev<=val
+                        elif "Below" in cnd: triggered_bg = curr<val and prev>=val
+                        vals_str_bg = f"CCI({p})={round(curr,2)}"
+                        sig_bg = "BUY" if ">" in cnd or "Above" in cnd else "SELL"
+
+                    elif "MFI" in ind:
+                        p   = int(params.get("mfi_period",14))
+                        cnd = params.get("mfi_condition","MFI > Value (Above)")
+                        val = float(params.get("mfi_value",50))
+                        mfi_arr = compute_mfi(high_bg, low_bg, prices_bg, vol_bg, p)
+                        curr = float(mfi_arr[-1]); prev = float(mfi_arr[-2]) if n_bg>1 else curr
+                        if   "Above" in cnd and "Crosses" not in cnd: triggered_bg = curr > val
+                        elif "Below" in cnd and "Crosses" not in cnd: triggered_bg = curr < val
+                        elif "Crosses Above" in cnd: triggered_bg = curr>val and prev<=val
+                        elif "Crosses Below" in cnd: triggered_bg = curr<val and prev>=val
+                        vals_str_bg = f"MFI({p})={round(curr,2)}"
+                        sig_bg = "BUY" if ">" in cnd or "Above" in cnd else "SELL"
+
+                    # ── Send Telegram if triggered ────────
+                    if triggered_bg and sig_bg:
+                        price_bg  = round(float(df_bg["Close"].iloc[-1]), 2)
+                        ts_bg     = str(df_bg.index[-1])[:16]
+                        icon_bg   = "📈" if sig_bg == "BUY" else "📉"
+                        s_icon_bg = "✅" if sig_bg == "BUY" else "🔴"
                         msg_bg = (
-                            f"{icon_bg} <b>NW Band Scanner — AUTO</b>\n"
+                            f"{icon_bg} <b>NW Band Scanner</b>\n"
                             f"━━━━━━━━━━━━━\n"
-                            f"{sig_icon_bg} <b>{sig_bg} SIGNAL</b>\n"
+                            f"{s_icon_bg} <b>{sig_bg} SIGNAL</b>\n"
                             f"🏷 Alert: {al_name}\n"
                             f"📌 Symbol: {sym_bg}\n"
                             f"⏱ Timeframe: {tf_bg}\n"
                             f"🎯 Condition: {cond_str_bg}\n"
                             f"📊 Values: {vals_str_bg}\n"
                             f"💰 Price: ₹{price_bg:,}\n"
-                            f"🕐 Time: {ts_bg}\n"
+                            f"🕐 {ts_bg}\n"
                             f"━━━━━━━━━━━━━"
                         )
-                        requests.post(
-                            f"https://api.telegram.org/bot{tok}/sendMessage",
-                            json={"chat_id": cid, "text": msg_bg, "parse_mode": "HTML"},
-                            timeout=10
-                        )
+                        try:
+                            requests.post(
+                                f"https://api.telegram.org/bot{tok}/sendMessage",
+                                json={"chat_id": cid, "text": msg_bg, "parse_mode": "HTML"},
+                                timeout=10
+                            )
+                        except Exception:
+                            pass
+
                 except Exception:
-                    continue  # skip failed symbol, keep scanning others
+                    continue
 
 # (trigger moved below fetch_data definition)
 
