@@ -2106,6 +2106,19 @@ with st.sidebar:
     scan_tf = st.selectbox("Scanner Timeframe", list(TIMEFRAMES.keys()), index=5, key='scan_tf')
     auto_refresh = st.checkbox("🔄 Auto-refresh (60s)", value=False)
 
+    # ── Background Scan Debug ─────────────────
+    st.divider()
+    st.markdown("### 🔍 Auto-Scan Debug")
+    if '_bg_debug' in dir():
+        for _d in _bg_debug:
+            st.caption(_d)
+    else:
+        st.caption("Debug info loading...")
+    if st.button("🔄 Force Scan Now", key="force_bg_scan"):
+        save_persistent("last_auto_scan_time", 0)
+        st.success("✅ Cooldown reset! Refresh karo.")
+        st.rerun()
+
 # ─────────────────────────────────────────────────────────────────
 # TRIGGER BACKGROUND AUTO-SCAN
 # All dependencies (bandwidth, mult, lookback, indicator_choice,
@@ -2113,10 +2126,32 @@ with st.sidebar:
 # Throttled internally to once per 4 minutes per app instance.
 # Triggered every time someone (or UptimeRobot) loads this page.
 # ─────────────────────────────────────────────────────────────────
+# Run background scan + show debug in sidebar
+_bg_debug = []
 try:
-    run_background_auto_scan()
-except Exception:
-    pass
+    import time as _t
+    _last = load_persistent("last_auto_scan_time", 0)
+    _now  = _t.time()
+    _diff = int(_now - float(_last))
+    _bg_debug.append(f"Last scan: {_diff}s ago (cooldown=240s)")
+
+    _bg_tok = str(_PRESET_TOKEN or load_persistent("tg_token","")).strip()
+    _bg_cid = str(_PRESET_CHAT_ID or load_persistent("tg_chat_id","")).strip()
+    _bg_debug.append(f"Token: {'✅ found' if len(_bg_tok)>10 else '❌ missing'}")
+    _bg_debug.append(f"Chat ID: {'✅ found' if _bg_cid else '❌ missing'}")
+
+    _bg_alerts = load_persistent("saved_alerts", {})
+    _bg_debug.append(f"Saved alerts (file): {len(_bg_alerts)}")
+    _bg_ss_alerts = st.session_state.get("saved_alerts", {})
+    _bg_debug.append(f"Saved alerts (session): {len(_bg_ss_alerts)}")
+
+    if _diff >= 240:
+        run_background_auto_scan()
+        _bg_debug.append("✅ Scan ran!")
+    else:
+        _bg_debug.append(f"⏳ Cooldown: {240-_diff}s remaining")
+except Exception as _bg_err:
+    _bg_debug.append(f"❌ Error: {_bg_err}")
 
 # ─────────────────────────────────────────────────────────────────
 # HEADER
