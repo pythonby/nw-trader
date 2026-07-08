@@ -8,21 +8,3 @@ on:
 jobs:
   check-alerts:
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install yfinance pandas numpy requests
-
-      - name: Run Alert Checker
-        env:
-          TG_TOKEN: ${{ secrets.TG_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          ALERTS_JSON: ${{ secrets.ALERTS_JSON }}
-        run: python alert_checker.py
