@@ -154,6 +154,20 @@ def _save_storage(data: dict):
 
     return ok
 
+
+def save_persistent(key: str, value):
+    """Ek key/value save karo (poori storage load karke update, phir wapas save)."""
+    data = _load_storage()
+    data[key] = value
+    _save_storage(data)
+
+
+def load_persistent(key: str, default=None):
+    """Ek key ki value load karo, na mile to default return karo."""
+    data = _load_storage()
+    return data.get(key, default)
+
+
 def init_persistent_state():
     """
     Initialize state on every page load.
