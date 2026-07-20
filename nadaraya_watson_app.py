@@ -67,44 +67,92 @@ import json as _json
 import os as _os
 
 # ─────────────────────────────────────────────────────────────────
-# PERSISTENT STORAGE — JSON file based (survives app restarts)
-# File saves on Streamlit Cloud's /tmp or local folder
+# PERSISTENT STORAGE — GitHub repo file based (SURVIVES app sleep/restart)
+# /tmp ki jagah ab GitHub repo me data/nw_scanner_data.json me save hoga.
+# Local /tmp ko sirf FAST CACHE ki tarah use karte hain (same session ke liye),
+# GitHub hi source-of-truth hai jo restarts ke baad bhi bacha rahega.
 # ─────────────────────────────────────────────────────────────────
+
+import base64
 
 STORAGE_FILE = "/tmp/nw_scanner_data.json"
 
+GITHUB_TOKEN      = get_secret("GITHUB_PAT")
+GITHUB_REPO_OWNER = "pythonby"
+GITHUB_REPO_NAME  = "nw-trader"
+GITHUB_DATA_PATH  = "data/nw_scanner_data.json"
+_GH_API           = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/contents/{GITHUB_DATA_PATH}"
+
+
+def _gh_headers():
+    return {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github+json"}
+
+
 def _load_storage():
-    """Load all persistent data from JSON file"""
+    """Load persistent data — pehle GitHub se try karo, fail ho to local /tmp fallback."""
+    if GITHUB_TOKEN:
+        try:
+            r = requests.get(_GH_API, headers=_gh_headers(), timeout=10)
+            if r.status_code == 200:
+                content = r.json()
+                decoded = json.loads(base64.b64decode(content["content"]).decode("utf-8"))
+                st.session_state["_gh_sha"] = content["sha"]
+                # local /tmp me bhi cache kar lo (fast repeated reads ke liye)
+                try:
+                    with open(STORAGE_FILE, "w") as f:
+                        json.dump(decoded, f, default=str)
+                except: pass
+                return decoded
+            elif r.status_code == 404:
+                st.session_state["_gh_sha"] = None
+                return {}
+        except Exception:
+            pass  # network issue -> neeche /tmp fallback try hoga
+
+    # Fallback: local /tmp (agar GITHUB_PAT set nahi hai ya GitHub unreachable hai)
     try:
-        if _os.path.exists(STORAGE_FILE):
+        if os.path.exists(STORAGE_FILE):
             with open(STORAGE_FILE, "r") as f:
-                return _json.load(f)
+                return json.load(f)
     except: pass
     return {}
 
+
 def _save_storage(data: dict):
-    """Save all persistent data to JSON file"""
+    """Save persistent data — GitHub repo file me commit karo (permanent), + local /tmp cache."""
+    ok = False
+
+    # 1) Local /tmp me turant save karo (fast, current session ke liye)
     try:
         with open(STORAGE_FILE, "w") as f:
-            _json.dump(data, f, indent=2, default=str)
-        return True
-    except: return False
-
-def save_persistent(key: str, value):
-    """Save a single key to persistent storage"""
-    try:
-        data = _load_storage()
-        data[key] = value
-        _save_storage(data)
+            json.dump(data, f, indent=2, default=str)
+        ok = True
     except: pass
 
-def load_persistent(key: str, default=None):
-    """Load a single key from persistent storage"""
-    try:
-        data = _load_storage()
-        return data.get(key, default)
-    except: return default
+    # 2) GitHub repo file me bhi commit karo (permanent — restart ke baad bhi rahega)
+    if GITHUB_TOKEN:
+        try:
+            content_str = json.dumps(data, indent=2, default=str)
+            encoded = base64.b64encode(content_str.encode("utf-8")).decode("utf-8")
 
+            sha = st.session_state.get("_gh_sha")
+            if sha is None:
+                r_get = requests.get(_GH_API, headers=_gh_headers(), timeout=10)
+                if r_get.status_code == 200:
+                    sha = r_get.json().get("sha")
+
+            payload = {"message": "Auto-update nw_scanner_data.json", "content": encoded}
+            if sha:
+                payload["sha"] = sha
+
+            r_put = requests.put(_GH_API, headers=_gh_headers(), json=payload, timeout=15)
+            if r_put.status_code in (200, 201):
+                st.session_state["_gh_sha"] = r_put.json()["content"]["sha"]
+                ok = True
+        except Exception:
+            pass  # GitHub save fail hua to bhi local /tmp save to ho hi chuka hai
+
+    return ok
 
 def init_persistent_state():
     """
@@ -2100,7 +2148,7 @@ with st.sidebar:
     st.markdown("### Live Scanner")
     scan_symbols_raw = st.text_area(
         "Scan Symbols (one per line)",
-        value="RELIANCE.NS\nINFY.NS\nTCS.NS\nHDFCBANK.NS\nNIFTY50=F",
+        value="RELIANCE.NS\nINFY.NS\nTCS.NS\nHDFCBANK.NS\n^NSEI",
         height=120
     )
     scan_tf = st.selectbox("Scanner Timeframe", list(TIMEFRAMES.keys()), index=5, key='scan_tf')
@@ -4307,10 +4355,26 @@ with tab_screener:
             else:
                 st.info("⚪ Koi stock sab filters pass nahi kar paya. Filters loosens karo ya alag timeframe try karo.")
 
-# ══════════════════════════════════════════════
-# TAB 7: HELP
-# ══════════════════════════════════════════════
-# ══════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────
+# AUTO-REFRESH (if enabled) — NON-BLOCKING version
+# Purana time.sleep(60) + st.rerun() Streamlit server thread ko
+# 60 second tak block karta tha — isse resource usage badhta hai
+# aur app sleep/slow-wake ka chance zyada hota hai.
+# Ab browser hi JS ke through 60s baad page reload karega —
+# server thread free rehta hai, koi blocking nahi.
+# ─────────────────────────────────────────────────────────────────
+if auto_refresh:
+    import streamlit.components.v1 as components
+    components.html(
+        """
+        <script>
+            setTimeout(function() {
+                window.parent.location.reload();
+            }, 60000);
+        </script>
+        """,
+        height=0,
+    )
 with tab_help:
     st.markdown("""
     ### 📖 How to Use
