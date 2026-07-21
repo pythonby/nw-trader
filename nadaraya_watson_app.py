@@ -105,7 +105,18 @@ def _load_storage():
                 return decoded
             elif r.status_code == 404:
                 st.session_state["_gh_sha"] = None
-                return {}
+                # GitHub file abhi tak nahi bani -- purana /tmp data check karo (migration)
+                local_data = {}
+                try:
+                    if os.path.exists(STORAGE_FILE):
+                        with open(STORAGE_FILE, "r") as f:
+                            local_data = json.load(f)
+                except:
+                    local_data = {}
+                if local_data:
+                    # purana data mila -- GitHub par seed (pehli baar push) kar do taki lost na ho
+                    _save_storage(local_data)
+                return local_data
         except Exception:
             pass  # network issue -> neeche /tmp fallback try hoga
 
