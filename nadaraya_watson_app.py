@@ -155,11 +155,46 @@ def _save_storage(data: dict):
     return ok
 
 
+def _sync_alerts_secret(alerts_value):
+    """
+    saved_alerts ko GitHub Actions SECRET (ALERTS_JSON) me bhi sync karta hai,
+    taki alert_checker.py (cron, har 15 min) ko latest alerts milein —
+    browser khula hone ki zaroorat na pade.
+    """
+    if not GITHUB_TOKEN:
+        return
+    try:
+        from nacl import encoding, public
+        key_url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/actions/secrets/public-key"
+        key_resp = requests.get(key_url, headers=_gh_headers(), timeout=10)
+        if key_resp.status_code != 200:
+            return
+        key_data = key_resp.json()
+
+        secret_value = json.dumps(alerts_value)
+        pub_key = public.PublicKey(key_data["key"].encode("utf-8"), encoding.Base64Encoder())
+        sealed_box = public.SealedBox(pub_key)
+        encrypted = base64.b64encode(sealed_box.encrypt(secret_value.encode("utf-8"))).decode("utf-8")
+
+        secret_url = f"https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/actions/secrets/ALERTS_JSON"
+        requests.put(
+            secret_url,
+            headers=_gh_headers(),
+            json={"encrypted_value": encrypted, "key_id": key_data["key_id"]},
+            timeout=15,
+        )
+    except Exception:
+        pass  # secret sync fail ho to bhi app / repo storage kaam karta rahega
+
+
 def save_persistent(key: str, value):
     """Ek key/value save karo (poori storage load karke update, phir wapas save)."""
     data = _load_storage()
     data[key] = value
     _save_storage(data)
+
+    if key == "saved_alerts":
+        _sync_alerts_secret(value)
 
 
 def load_persistent(key: str, default=None):
