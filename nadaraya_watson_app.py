@@ -1486,25 +1486,16 @@ with st.sidebar:
         # ══════════════════════════════════════════
         "🏆 NIFTY INDICES": {
             "Nifty 50":              "^NSEI",
-            "Nifty Next 50":         "^NSMIDCP",
-            "Nifty 100":             "^CNX100",
-            "Nifty 200":             "^CNX200",
-            "Nifty 500":             "^CNX500",
+            "Nifty Bank":            "^NSEBANK",
             "Nifty Midcap 50":       "^NSEMDCP50",
-            "Nifty Midcap 100":      "^NSEMDCP100",
-            "Nifty Smallcap 50":     "^CNXSC",
-            "Nifty Smallcap 100":    "NIFTY_SMLCAP100.NS",
-            "Nifty Smallcap 250":    "NIFTY_SMLCAP250.NS",
-            "Nifty LargeMidcap 250": "NIFTY_LARGEMID250.NS",
-            "Nifty MicroCap 250":    "NIFTY_MICROCAP250.NS",
-            "Nifty Total Market":    "NIFTY_TOTAL_MKT.NS",
             "Sensex":                "^BSESN",
-            "BSE 100":               "BSE-100.BO",
-            "BSE 200":               "BSE-200.BO",
-            "BSE 500":               "BSE-500.BO",
-            "BSE Midcap":            "BSE-MID.BO",
-            "BSE Smallcap":          "BSE-SMLCAP.BO",
             "India VIX":             "^INDIAVIX",
+            # Neeche wale symbols Yahoo Finance par exist nahi karte (invalid/delisted),
+            # isliye hata diye gaye hain -- ye scan/alerts me "possibly delisted" error deते the:
+            # Nifty Next 50 (^NSMIDCP), Nifty 100 (^CNX100), Nifty 200 (^CNX200),
+            # Nifty 500 (^CNX500), Nifty Midcap 100 (^NSEMDCP100), Nifty Smallcap 50 (^CNXSC),
+            # Nifty Smallcap 100/250, Nifty LargeMidcap 250, Nifty MicroCap 250,
+            # Nifty Total Market, BSE 100/200/500/Midcap/Smallcap
         },
         # ══════════════════════════════════════════
         "🏭 NIFTY SECTORS": {
