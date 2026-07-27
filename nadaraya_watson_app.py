@@ -1509,29 +1509,17 @@ with st.sidebar:
             "Nifty Realty":          "^CNXREALTY",
             "Nifty Media":           "^CNXMEDIA",
             "Nifty Infra":           "^CNXINFRA",
-            "Nifty PSU Bank":        "^CNXPSUBANK",
-            "Nifty Private Bank":    "NIFTY_PVT_BANK.NS",
-            "Nifty Financial Serv":  "^CNXFINANCE",
-            "Nifty Healthcare":      "NIFTY_HEALTH.NS",
-            "Nifty Consumer Dur":    "NIFTY_CONSR_DURBL.NS",
-            "Nifty Oil & Gas":       "NIFTY_OIL_AND_GAS.NS",
-            "Nifty Chemicals":       "NIFTY_INDIA_CHEMICAL.NS",
-            "Nifty Defence":         "NIFTY_INDIA_DEFENCE.NS",
-            "Nifty MNC":             "^CNXMNC",
-            "Nifty Services":        "^CNXSERVICE",
-            "Nifty Commodities":     "^CNXCMDT",
-            "Nifty Div Opps 50":     "^CNXDIVOP",
-            "Nifty Alpha 50":        "NIFTY_ALPHA_50.NS",
-            "Nifty100 Quality 30":   "NIFTY100_QUALITY30.NS",
+            "Nifty Financial Serv":  "^CNXFIN",
+            # Neeche wale symbols Yahoo Finance par exist nahi karte (invalid/fabricated),
+            # isliye hata diye gaye hain: Nifty PSU Bank, Nifty Private Bank, Nifty Healthcare,
+            # Nifty Consumer Durables, Nifty Oil & Gas, Nifty Chemicals, Nifty Defence,
+            # Nifty MNC, Nifty Services, Nifty Commodities, Nifty Div Opps 50,
+            # Nifty Alpha 50, Nifty100 Quality 30
         },
         # ══════════════════════════════════════════
-        "📈 F&O FUTURES": {
-            "Nifty 50 Futures":      "NIFTY50=F",
-            "BankNifty Futures":     "BANKNIFTY=F",
-            "FinNifty Futures":      "FINNIFTY=F",
-            "MidcapNifty Futures":   "MIDCPNIFTY=F",
-            "Sensex Futures":        "SENSEX=F",
-        },
+        # F&O FUTURES section hata diya gaya -- "=F" suffix wale Indian NFO futures
+        # (NIFTY50=F, BANKNIFTY=F, FINNIFTY=F, MIDCPNIFTY=F, SENSEX=F) Yahoo Finance
+        # par valid tickers nahi hain, isliye ye har scan me "possibly delisted" error dete the.
         # ══════════════════════════════════════════
         "🏢 NIFTY 50 STOCKS": {
             "Reliance":              "RELIANCE.NS",
