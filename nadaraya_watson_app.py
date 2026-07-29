@@ -3619,6 +3619,61 @@ with tab_watchlist:
                 else:
                     st.error("❌ Symbol likhein ya list se choose karo!")
 
+            # ── EXCEL/CSV SE SYMBOLS LOAD KARO ────────────
+            st.markdown("---")
+            with st.expander("📂 Excel/CSV se Symbols Load Karo", expanded=False):
+                st.caption("NSE ya kahin se bhi download ki hui Excel/CSV file upload karo — symbols apne aap dhundh liye jayenge.")
+                up_file = st.file_uploader(
+                    "Excel (.xlsx/.xls) ya CSV file",
+                    type=["xlsx", "xls", "csv"],
+                    key="wl_excel_upload"
+                )
+                if up_file is not None:
+                    try:
+                        if up_file.name.lower().endswith(".csv"):
+                            df_up = pd.read_csv(up_file)
+                        else:
+                            df_up = pd.read_excel(up_file)
+
+                        # Symbol column dhundo -- common naam try karo
+                        possible_cols = ["SYMBOL", "Symbol", "symbol", "SCRIP", "Scrip", "SCRIPT",
+                                          "Script", "TICKER", "Ticker", "TckrSymb", "NSE Symbol",
+                                          "Trading Symbol", "TRADINGSYMBOL"]
+                        sym_col = None
+                        for c in possible_cols:
+                            if c in df_up.columns:
+                                sym_col = c
+                                break
+                        if sym_col is None:
+                            sym_col = df_up.columns[0]  # fallback: pehla column use karo
+
+                        raw_syms = df_up[sym_col].dropna().astype(str).str.strip().str.upper().tolist()
+
+                        # ".NS" suffix add karo agar already koi suffix (.NS/.BO/other) na ho
+                        clean_syms = []
+                        for s in raw_syms:
+                            if not s or s in ("SYMBOL", "NAN"):
+                                continue
+                            if "." not in s and "-" not in s and "^" not in s:
+                                s = s + ".NS"
+                            clean_syms.append(s)
+                        clean_syms = sorted(set(clean_syms))
+
+                        st.success(f"✅ {len(clean_syms)} symbols mile file me (column: '{sym_col}')")
+                        st.write(", ".join(clean_syms[:15]) + (" ..." if len(clean_syms) > 15 else ""))
+
+                        if st.button("📥 Sabhi Watchlist Me Add Karo", key="wl_excel_confirm", type="primary"):
+                            added_n = 0
+                            for s in clean_syms:
+                                if s not in st.session_state.watchlists[active]:
+                                    st.session_state.watchlists[active].append(s)
+                                    added_n += 1
+                            save_persistent("watchlists", st.session_state.watchlists)
+                            st.success(f"✅ {added_n} naye symbols '{active}' watchlist me add ho gaye!")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ File padhne me error: {e}")
+
             # ── STOCK LIST WITH DELETE ───────────
             st.markdown("---")
             st.markdown("**📃 Stock List**")
