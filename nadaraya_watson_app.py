@@ -2356,7 +2356,7 @@ with tab_backtest:
     # ── Symbol Source ─────────────────────────
     bt_src_c1, bt_src_c2 = st.columns([1,1])
     with bt_src_c1:
-        bt_source = st.radio("📂 Symbol Source", ["✅ Selected Symbol", "🏆 Pick from Category"],
+        bt_source = st.radio("📂 Symbol Source", ["✅ Selected Symbol", "🏆 Pick from Category", "📋 My Watchlist"],
                               horizontal=True, key="bt_source_sel")
     with bt_src_c2:
         if bt_source == "🏆 Pick from Category":
@@ -2364,6 +2364,19 @@ with tab_backtest:
             bt_sym_options = INDEX_DATABASE.get(bt_cat, {})
             bt_sym_label = st.selectbox("Symbol", [k for k,v in bt_sym_options.items() if v!="CUSTOM"], key="bt_sym_sel")
             bt_symbol = bt_sym_options.get(bt_sym_label, symbol)
+        elif bt_source == "📋 My Watchlist":
+            wl_names = list(st.session_state.watchlists.keys())
+            if not wl_names:
+                st.warning("⚠️ Koi watchlist nahi bani. Pehle 'Watchlist' tab me jaake bana lo.")
+                bt_symbol = symbol
+            else:
+                bt_wl_name = st.selectbox("Watchlist", wl_names, key="bt_wl_sel")
+                bt_wl_syms = st.session_state.watchlists.get(bt_wl_name, [])
+                if not bt_wl_syms:
+                    st.warning(f"⚠️ '{bt_wl_name}' watchlist khali hai.")
+                    bt_symbol = symbol
+                else:
+                    bt_symbol = st.selectbox("Symbol", bt_wl_syms, key="bt_wl_sym_sel")
         else:
             bt_symbol = symbol
             st.caption(f"Using sidebar symbol: `{bt_symbol}`")
